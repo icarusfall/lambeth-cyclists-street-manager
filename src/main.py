@@ -21,7 +21,8 @@ _app_state = {
     "started_at": None,
     "last_notification_at": None,
     "notifications_processed": 0,
-    "notifications_filtered_out": 0,
+    "status": "starting",
+    "error": None,
 }
 
 
@@ -30,35 +31,46 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
     logger.info("Starting South London Street Works Monitor")
 
-    # Load borough boundaries
-    geojson_path = Path(__file__).parent.parent / "data" / "london_boroughs.geojson"
-    borough_polygons = load_borough_polygons(str(geojson_path), settings.target_boroughs)
+    try:
+        # Load borough boundaries
+        geojson_path = Path(__file__).parent.parent / "data" / "london_boroughs.geojson"
+        borough_polygons = load_borough_polygons(str(geojson_path), settings.target_boroughs)
 
-    # Initialise components
-    geo_filter = GeoFilter(borough_polygons)
-    notion_writer = NotionWriter()
-    pipeline = Pipeline(geo_filter, notion_writer)
+        # Initialise components
+        geo_filter = GeoFilter(borough_polygons)
+        notion_writer = NotionWriter()
+        pipeline = Pipeline(geo_filter, notion_writer)
 
-    # Warm the Notion cache (loads existing permit refs to avoid duplicates)
-    if settings.notion_api_key and settings.notion_roadworks_db_id:
-        await notion_writer.warm_cache()
-    else:
-        logger.warning("Notion not configured — running in dry-run mode")
+        # Warm the Notion cache (loads existing permit refs to avoid duplicates)
+        if settings.notion_api_key and settings.notion_roadworks_db_id:
+            try:
+                await notion_writer.warm_cache()
+            except Exception:
+                logger.exception("Failed to warm Notion cache — will query per item")
+        else:
+            logger.warning("Notion not configured — running in dry-run mode")
 
-    # Wire up the SNS webhook to the pipeline
-    async def handle_notification(notification: dict) -> None:
-        _app_state["last_notification_at"] = datetime.now(timezone.utc).isoformat()
-        _app_state["notifications_processed"] += 1
-        await pipeline.process_notification(notification)
+        # Wire up the SNS webhook to the pipeline
+        async def handle_notification(notification: dict) -> None:
+            _app_state["last_notification_at"] = datetime.now(timezone.utc).isoformat()
+            _app_state["notifications_processed"] += 1
+            await pipeline.process_notification(notification)
 
-    set_notification_handler(handle_notification)
+        set_notification_handler(handle_notification)
+
+        _app_state["status"] = "ok"
+        logger.info(
+            "Ready — monitoring %d boroughs: %s",
+            len(settings.target_boroughs),
+            ", ".join(settings.target_boroughs),
+        )
+
+    except Exception as e:
+        logger.exception("Startup error — app will serve health endpoint but not process notifications")
+        _app_state["status"] = "degraded"
+        _app_state["error"] = str(e)
 
     _app_state["started_at"] = datetime.now(timezone.utc).isoformat()
-    logger.info(
-        "Ready — monitoring %d boroughs: %s",
-        len(settings.target_boroughs),
-        ", ".join(settings.target_boroughs),
-    )
 
     yield
 
@@ -79,9 +91,10 @@ app.include_router(webhook_router)
 async def health():
     """Health check endpoint for Railway monitoring."""
     return {
-        "status": "ok",
+        "status": _app_state["status"],
         "started_at": _app_state["started_at"],
         "last_notification_at": _app_state["last_notification_at"],
         "notifications_processed": _app_state["notifications_processed"],
         "boroughs_monitored": len(settings.target_boroughs),
+        "error": _app_state["error"],
     }

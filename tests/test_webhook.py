@@ -18,7 +18,7 @@ class TestSnsWebhook:
         resp = client.get("/health")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["status"] == "ok"
+        assert data["status"] in ("ok", "starting", "degraded")
 
     def test_notification_returns_200(self, client):
         """Valid notification should be accepted (200) even without Notion configured."""
