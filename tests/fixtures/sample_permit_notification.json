@@ -1,0 +1,32 @@
+{
+  "event_reference": 12345,
+  "event_type": "WORK_START",
+  "object_data": {
+    "work_reference_number": "TST0000001234",
+    "permit_reference_number": "TST0000001234-01",
+    "promoter_swa_code": "UKPN",
+    "promoter_organisation": "UK Power Networks",
+    "highway_authority": "LONDON BOROUGH OF LAMBETH",
+    "works_location_coordinates": "POINT(531100.00 176100.00)",
+    "street_name": "BRIXTON ROAD",
+    "area_name": "BRIXTON",
+    "work_category": "Minor",
+    "traffic_management_type": "Road closure",
+    "proposed_start_date": "2026-03-10T00:00:00.000Z",
+    "proposed_end_date": "2026-03-14T00:00:00.000Z",
+    "actual_start_date_time": "2026-03-10T08:00:00.000Z",
+    "work_status": "Works in progress",
+    "usrn": "22500123",
+    "highway_authority_swa_code": "5540",
+    "work_category_ref": "minor",
+    "traffic_management_type_ref": "road_closure",
+    "work_status_ref": "in_progress",
+    "activity_type": "Utility repair and maintenance works",
+    "is_ttro_required": "No",
+    "works_location_type": "Carriageway"
+  },
+  "event_time": "2026-03-10T08:00:00.000Z",
+  "object_type": "PERMIT",
+  "object_reference": "TST0000001234-01",
+  "version": 1
+}

@@ -1,0 +1,87 @@
+"""FastAPI application — receives Street Manager SNS notifications and writes to Notion."""
+
+import logging
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+
+from fastapi import FastAPI
+
+from src.config import settings
+from src.geo.boundaries import load_borough_polygons
+from src.geo.filter import GeoFilter
+from src.notion.writer import NotionWriter
+from src.pipeline import Pipeline
+from src.street_manager.webhook import router as webhook_router, set_notification_handler
+
+logger = logging.getLogger(__name__)
+
+# Track app state for health endpoint
+_app_state = {
+    "started_at": None,
+    "last_notification_at": None,
+    "notifications_processed": 0,
+    "notifications_filtered_out": 0,
+}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup and shutdown logic."""
+    logger.info("Starting South London Street Works Monitor")
+
+    # Load borough boundaries
+    geojson_path = Path(__file__).parent.parent / "data" / "london_boroughs.geojson"
+    borough_polygons = load_borough_polygons(str(geojson_path), settings.target_boroughs)
+
+    # Initialise components
+    geo_filter = GeoFilter(borough_polygons)
+    notion_writer = NotionWriter()
+    pipeline = Pipeline(geo_filter, notion_writer)
+
+    # Warm the Notion cache (loads existing permit refs to avoid duplicates)
+    if settings.notion_api_key and settings.notion_roadworks_db_id:
+        await notion_writer.warm_cache()
+    else:
+        logger.warning("Notion not configured — running in dry-run mode")
+
+    # Wire up the SNS webhook to the pipeline
+    async def handle_notification(notification: dict) -> None:
+        _app_state["last_notification_at"] = datetime.now(timezone.utc).isoformat()
+        _app_state["notifications_processed"] += 1
+        await pipeline.process_notification(notification)
+
+    set_notification_handler(handle_notification)
+
+    _app_state["started_at"] = datetime.now(timezone.utc).isoformat()
+    logger.info(
+        "Ready — monitoring %d boroughs: %s",
+        len(settings.target_boroughs),
+        ", ".join(settings.target_boroughs),
+    )
+
+    yield
+
+    logger.info("Shutting down")
+
+
+app = FastAPI(
+    title="South London Street Works Monitor",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+# Mount the SNS webhook router
+app.include_router(webhook_router)
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint for Railway monitoring."""
+    return {
+        "status": "ok",
+        "started_at": _app_state["started_at"],
+        "last_notification_at": _app_state["last_notification_at"],
+        "notifications_processed": _app_state["notifications_processed"],
+        "boroughs_monitored": len(settings.target_boroughs),
+    }

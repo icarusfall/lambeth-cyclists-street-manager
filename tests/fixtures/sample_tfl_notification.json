@@ -1,0 +1,32 @@
+{
+  "event_reference": 12346,
+  "event_type": "PERMIT_GRANTED",
+  "object_data": {
+    "work_reference_number": "TST0000005678",
+    "permit_reference_number": "TST0000005678-01",
+    "promoter_swa_code": "THAM",
+    "promoter_organisation": "Thames Water",
+    "highway_authority": "TRANSPORT FOR LONDON",
+    "works_location_coordinates": "POINT(530900.00 175800.00)",
+    "street_name": "BRIXTON ROAD",
+    "area_name": "BRIXTON",
+    "work_category": "Standard",
+    "traffic_management_type": "Lane closure",
+    "proposed_start_date": "2026-03-15T00:00:00.000Z",
+    "proposed_end_date": "2026-03-22T00:00:00.000Z",
+    "actual_start_date_time": null,
+    "work_status": "Planned",
+    "usrn": "22500456",
+    "highway_authority_swa_code": "0999",
+    "work_category_ref": "standard",
+    "traffic_management_type_ref": "lane_closure",
+    "work_status_ref": "planned",
+    "activity_type": "Utility repair and maintenance works",
+    "is_ttro_required": "Yes",
+    "works_location_type": "Carriageway"
+  },
+  "event_time": "2026-03-08T14:00:00.000Z",
+  "object_type": "PERMIT",
+  "object_reference": "TST0000005678-01",
+  "version": 1
+}
