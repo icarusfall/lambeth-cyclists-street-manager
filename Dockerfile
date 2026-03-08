@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir "fastapi>=0.115.0" "uvicorn[standard]>=0.34.0" \
 COPY data/ data/
 COPY src/ src/
 
-EXPOSE 8000
+ENV PORT=8000
+EXPOSE ${PORT}
 
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD sh -c "uvicorn src.main:app --host 0.0.0.0 --port ${PORT}"
