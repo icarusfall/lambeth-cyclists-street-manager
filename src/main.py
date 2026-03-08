@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
     try:
         # Load borough boundaries
         geojson_path = Path(__file__).parent.parent / "data" / "london_boroughs.geojson"
-        borough_polygons = load_borough_polygons(str(geojson_path), settings.target_boroughs)
+        borough_polygons = load_borough_polygons(str(geojson_path), settings.get_target_boroughs())
 
         # Initialise components
         geo_filter = GeoFilter(borough_polygons)
@@ -61,8 +61,8 @@ async def lifespan(app: FastAPI):
         _app_state["status"] = "ok"
         logger.info(
             "Ready — monitoring %d boroughs: %s",
-            len(settings.target_boroughs),
-            ", ".join(settings.target_boroughs),
+            len(settings.get_target_boroughs()),
+            ", ".join(settings.get_target_boroughs()),
         )
 
     except Exception as e:
@@ -95,6 +95,6 @@ async def health():
         "started_at": _app_state["started_at"],
         "last_notification_at": _app_state["last_notification_at"],
         "notifications_processed": _app_state["notifications_processed"],
-        "boroughs_monitored": len(settings.target_boroughs),
+        "boroughs_monitored": len(settings.get_target_boroughs()),
         "error": _app_state["error"],
     }

@@ -1,4 +1,5 @@
 import logging
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -20,13 +21,15 @@ BOROUGH_SWA_CODES: dict[str, str] = {
 # Works on these roads won't match by SWA code — they need geo-filtering.
 TFL_SWA_CODE = "0999"
 
+_DEFAULT_BOROUGHS = [
+    "Lambeth", "Southwark", "Wandsworth", "Lewisham",
+    "Merton", "Croydon", "City of London", "Westminster",
+]
+
 
 class Settings(BaseSettings):
-    # Borough configuration
-    target_boroughs: list[str] = [
-        "Lambeth", "Southwark", "Wandsworth", "Lewisham",
-        "Merton", "Croydon", "City of London", "Westminster",
-    ]
+    # Borough configuration — accepts comma-separated string from env var
+    target_boroughs: str = ""
 
     # Notion
     notion_api_key: str = ""
@@ -40,6 +43,12 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+
+    def get_target_boroughs(self) -> list[str]:
+        """Parse target boroughs from comma-separated string, or use defaults."""
+        if self.target_boroughs:
+            return [b.strip() for b in self.target_boroughs.split(",") if b.strip()]
+        return _DEFAULT_BOROUGHS
 
 
 settings = Settings()
