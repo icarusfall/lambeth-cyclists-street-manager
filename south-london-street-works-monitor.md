@@ -6,6 +6,50 @@
 **Author:** Charlie (Lambeth Cyclists / London Cycling Campaign)
 **Date:** March 2026
 **Purpose:** Hand-off document for Claude Code implementation
+**Repository:** https://github.com/icarusfall/lambeth-cyclists-street-manager
+
+---
+
+## Implementation Progress
+
+| Phase | Component | Status |
+|-------|-----------|--------|
+| 1 | Project setup (pyproject.toml, Dockerfile, config) | DONE |
+| 1 | Borough boundary loader | DONE |
+| 1 | SNS webhook receiver | DONE |
+| 1 | SNS signature verification | DONE |
+| 1 | Geo-filter pipeline | DONE |
+| 1 | Deduplication (via Notion queries + in-memory cache) | DONE |
+| 1 | Notion writer | DONE |
+| 1 | Cycling impact classifier (rule-based) | DONE |
+| 1 | Claude API enrichment (optional, for high/medium) | DONE |
+| 1 | Deployment to Railway | DONE |
+| 1 | Street Manager open data registration | SUBMITTED — awaiting confirmation (up to 1 working day) |
+| 1 | Notion Roadworks database created & connected | DONE |
+| 1 | Tests (32 passing) | DONE |
+| 2 | D-TRO integration | NOT STARTED |
+| 2 | Traffic Orders Notion database | NOT STARTED |
+| 3 | USRN enrichment, historical analysis, alerts, dashboard | NOT STARTED |
+
+### Changes from Original Spec
+
+1. **SNS-only architecture (not polling).** The Street Manager open data feed is SNS-only — there is no public REST API or CSV export for open data consumers. The REST API (`GET /works/updates`) requires an authenticated organizational account (highway authority/utility company). Railway provides the HTTPS endpoint for SNS; no AWS account is needed.
+
+2. **No `schedule`/`apscheduler` needed.** Since we're using SNS push (not polling), there are no scheduled jobs in Phase 1. The app is purely event-driven. Scheduled jobs will be added in Phase 2 for D-TRO polling.
+
+3. **Deduplication via Notion, not local JSON file.** Railway containers can restart and lose local state. Instead, the app queries Notion by `permit_reference_number` to check for existing records before creating new ones. An in-memory cache (warmed at startup from Notion) avoids per-item Notion queries during normal operation.
+
+4. **`notion-client` pinned to v2.2.1.** Version 2.3+ removed `databases.query()`. Pinned to match the version used by the lambeth-cyclists-claude project.
+
+5. **`pydantic-settings` target_boroughs is a string, not a list.** Pydantic-settings v2 tries to JSON-parse `list[str]` fields from env vars, which fails for comma-separated strings. Changed to a `str` field with a `get_target_boroughs()` method that splits on commas.
+
+6. **SNS signature verification added.** The original spec noted this was missing. Now implemented using the `cryptography` package to validate SNS message signatures against AWS signing certificates.
+
+7. **SWA codes corrected.** The env var example in the original spec (`5660,5630,...`) didn't match the table in Section 10. The implemented codes match the Section 10 table. These still need verification against the live Street Manager API once notifications start flowing.
+
+8. **Borough boundaries sourced from ONS, not London Datastore.** The London Datastore provides shapefiles, not GeoJSON. Used the ONS Open Geography Portal ArcGIS API instead (`Local_Authority_Districts_December_2024_Boundaries_UK_BFE`), which provides GeoJSON directly. Property key for borough names is `LAD24NM`.
+
+9. **Removed planned files that weren't needed.** `parser.py`, `poller.py`, `state/dedup.py`, `dtro/client.py`, and `scripts/backfill.py` from the original structure were not created — the SNS architecture is simpler and doesn't need them. Added `pipeline.py` and `sns_verify.py` instead.
 
 ---
 
@@ -37,9 +81,13 @@ This list is configurable via environment variable.
 
 **What:** Every utility street work and highway authority road work in England.
 
-**API type:** AWS SNS push notifications (primary) + REST polling endpoint (fallback).
+**API type:** AWS SNS push notifications. This is the **only** open data access method — there is no public REST polling API or CSV export for open data consumers.
 
 **Registration:** Free open data account at https://www.manage-roadworks.service.gov.uk/open-data-onboarding
+
+**Status:** Registration submitted 8 March 2026. Awaiting confirmation (up to 1 working day). The endpoint registered is `https://lambeth-cyclists-street-manager-production.up.railway.app/webhook/street-manager`.
+
+**Support helpdesk:** https://streetmanager.atlassian.net/servicedesk/customer/portals
 
 **Three SNS topics to subscribe to:**
 - `arn:aws:sns:eu-west-2:287813576808:prod-permit-topic` — permits (the main one)
@@ -93,13 +141,17 @@ This list is configurable via environment variable.
 
 **Important:** TfL manages the TLRN (red routes) and will appear as the highway authority for major roads passing through our target boroughs (e.g. A23 Brixton Road, A3 Kennington Road, A202). We CANNOT rely solely on `highway_authority_swa_code` matching a borough — we must also geo-filter works from other authorities (primarily TfL) that fall within our target area.
 
-**Fallback polling endpoint:** `GET /works/updates` on the Event API, plus hourly CSV exports via the Data Export API. Use these for backfill/catch-up if SNS notifications are missed.
-
-**Python client library:** https://github.com/cogna-public/streetmanager (may be useful, evaluate during implementation).
+**Event types we process:**
+- `WORK_START`, `WORK_STOP`, `WORK_START_REVERTED`
+- `PERMIT_SUBMITTED`, `PERMIT_GRANTED`, `PERMIT_REFUSED`, `PERMIT_CANCELLED`, `PERMIT_REVOKED`
+- `PERMIT_ALTERATION_SUBMITTED`, `PERMIT_ALTERATION_GRANTED`
+- `ACTIVITY_CREATED`, `ACTIVITY_UPDATED`, `ACTIVITY_CANCELLED`
+- `SECTION_58_APPLIED`, `SECTION_58_REMOVED`
+- All other event types (inspections, FPNs, comments, reinstatements) are silently acknowledged and discarded.
 
 **API documentation:** https://department-for-transport-streetmanager.github.io/street-manager-docs/api-documentation/
 
-### 2.2 D-TRO Service (DfT) — Digital Traffic Regulation Orders
+### 2.2 D-TRO Service (DfT) — Digital Traffic Regulation Orders (Phase 2)
 
 **What:** Machine-readable versions of traffic regulation orders — speed limits, parking restrictions, one-way streets, road closures, weight limits, etc.
 
@@ -107,28 +159,19 @@ This list is configurable via environment variable.
 
 **Registration:** Free at the URL above.
 
-**Status:** Beta — the DfT planned to table regulations in Autumn 2025 making digital submission mandatory. Coverage may still be patchy. Check whether Lambeth and neighbouring authorities are actively publishing D-TROs.
+**Status:** Beta — coverage for London boroughs likely still patchy. Deferred to Phase 2 — verify data availability before building.
 
 **GitHub:** https://github.com/department-for-transport-public/D-TRO — contains data model docs, schema files, and example data for the current spec version (3.5.0).
-
-**Implementation note:** D-TROs include geographic extents, so the same geo-filtering approach applies. Poll this API on a schedule (e.g. daily) rather than expecting push notifications.
-
-**Priority:** Lower than Street Manager. Implement Street Manager first, add D-TRO support as a second phase. The API may require more exploration during implementation to understand the actual data format and query capabilities.
 
 ### 2.3 Borough Boundary Data — Geographic Filtering
 
 **What:** GeoJSON polygon boundaries for London boroughs, used to determine whether a roadwork/order falls within our target area.
 
-**Source:** London Datastore statistical GIS boundary files: https://data.london.gov.uk/dataset/statistical-gis-boundary-files-london
+**Source used:** ONS Open Geography Portal ArcGIS REST API — `Local_Authority_Districts_December_2024_Boundaries_UK_BFE` dataset. Downloaded as GeoJSON directly via API query, stored in repo as `data/london_boroughs.geojson`. Property key for borough names: `LAD24NM`.
 
-**Alternative sources:**
-- OS Boundary-Line (free open data): https://www.ordnancesurvey.co.uk/products/boundary-line
-- ONS Open Geography Portal: https://geoportal.statistics.gov.uk/
-- Pre-made London borough GeoJSON on GitHub (various repos)
+**Why ONS and not London Datastore:** The London Datastore provides shapefiles (requiring conversion), while the ONS portal serves GeoJSON directly via its ArcGIS API.
 
-**Approach:** Download once, store in repo as a static GeoJSON file. No runtime API dependency on OS Data Hub or any external geo service. Load the target borough polygons at startup, union them into a single MultiPolygon using Shapely, and use it for point-in-polygon checks.
-
-**Coordinate systems:** Street Manager uses British National Grid (EPSG:27700). Borough boundaries may be in WGS84 (EPSG:4326) or BNG depending on source. Either convert the borough boundaries to BNG at load time, or convert incoming coordinates to WGS84. Recommend converting incoming BNG coordinates to WGS84 using `pyproj`, since most boundary sources default to WGS84.
+**Coordinate systems:** Street Manager uses British National Grid (EPSG:27700). Borough boundaries are in WGS84 (EPSG:4326). Incoming BNG coordinates are converted to WGS84 using `pyproj` at processing time.
 
 ---
 
@@ -141,39 +184,42 @@ This list is configurable via environment variable.
                     │   Street Manager    │
                     │   AWS SNS Topics    │
                     └────────┬────────────┘
-                             │ HTTPS POST
+                             │ HTTPS POST (signed)
                              ▼
 ┌──────────────────────────────────────────────┐
 │          Python Daemon (Railway)              │
+│  lambeth-cyclists-street-manager-production   │
+│  .up.railway.app                             │
 │                                              │
-│  ┌─────────────┐  ┌──────────────────────┐   │
-│  │ Flask/Fast-  │  │  Scheduled Jobs      │   │
-│  │ API webhook  │  │  - D-TRO poll        │   │
-│  │ receiver     │  │  - Cleanup/update    │   │
-│  └──────┬───────┘  └──────────┬───────────┘   │
-│         │                     │               │
-│         ▼                     ▼               │
+│  ┌─────────────┐                             │
+│  │ FastAPI      │                             │
+│  │ webhook      │                             │
+│  │ receiver     │                             │
+│  │ + SNS sig    │                             │
+│  │   verify     │                             │
+│  └──────┬───────┘                             │
+│         │                                    │
+│         ▼                                    │
 │  ┌──────────────────────────────────────┐     │
 │  │        Geo-Filter Engine             │     │
 │  │  1. SWA code check (fast path)       │     │
-│  │  2. Point-in-polygon (geo path)      │     │
+│  │  2. BNG→WGS84 + point-in-polygon    │     │
 │  │  Borough boundaries loaded at start  │     │
 │  └──────────────┬───────────────────────┘     │
 │                 │                              │
 │                 ▼                              │
 │  ┌──────────────────────────────────────┐     │
-│  │     Relevance Classifier             │     │
-│  │  - Claude API for cycling relevance  │     │
-│  │  - Traffic mgmt type categorisation  │     │
-│  │  - Borough tagging                   │     │
+│  │     Cycling Impact Classifier        │     │
+│  │  - Rule-based (all works)            │     │
+│  │  - Claude Haiku summary (high/med)   │     │
 │  └──────────────┬───────────────────────┘     │
 │                 │                              │
 │                 ▼                              │
 │  ┌──────────────────────────────────────┐     │
 │  │     Notion Writer                    │     │
 │  │  - Upsert to Roadworks DB            │     │
-│  │  - Upsert to Traffic Orders DB       │     │
-│  │  - Update status of existing items   │     │
+│  │  - Dedup via permit_ref query        │     │
+│  │  - In-memory cache warmed at start   │     │
 │  └──────────────────────────────────────┘     │
 │                                              │
 └──────────────────────────────────────────────┘
@@ -184,10 +230,10 @@ This list is configurable via environment variable.
                     │   (Lambeth Cyclists) │
                     │                     │
                     │  ┌───────────────┐  │
-                    │  │ Roadworks DB  │  │
+                    │  │ Roadworks DB  │  │ ← DONE
                     │  └───────────────┘  │
                     │  ┌───────────────┐  │
-                    │  │ Traffic       │  │
+                    │  │ Traffic       │  │ ← Phase 2
                     │  │ Orders DB     │  │
                     │  └───────────────┘  │
                     └─────────────────────┘
@@ -196,40 +242,35 @@ This list is configurable via environment variable.
 ### 3.2 Deployment
 
 - **Platform:** Railway (existing infrastructure from Lambeth Cyclists email automation)
-- **Runtime:** Python 3.11+
-- **Process:** Single long-running process with both a web server (for SNS webhook) and scheduled tasks (for D-TRO polling, status updates)
-- **Database:** None — Notion is the datastore. Use local state only for deduplication (in-memory set of recently-seen permit references, persisted to a small JSON file or Railway volume)
-- **Domain:** The webhook endpoint needs a publicly accessible HTTPS URL. Railway provides this automatically.
+- **URL:** `https://lambeth-cyclists-street-manager-production.up.railway.app`
+- **Runtime:** Python 3.11 (Docker)
+- **Process:** Single long-running process with a FastAPI web server for the SNS webhook
+- **Database:** None — Notion is the datastore. Deduplication uses an in-memory cache (warmed from Notion at startup) backed by Notion queries for cache misses.
+- **Health check:** `GET /health` — returns status, uptime, notification count, borough count
 
 ### 3.3 Configuration (Environment Variables)
 
 ```
 # Borough list (comma-separated borough names matching the boundary GeoJSON)
+# Optional — defaults to all 8 boroughs if not set
 TARGET_BOROUGHS=Lambeth,Southwark,Wandsworth,Lewisham,Merton,Croydon,City of London,Westminster
 
-# Known borough SWA codes for fast-path filtering
-# (TfL SWA code is also needed for the geo-path)
-BOROUGH_SWA_CODES=5660,5630,5690,5420,5510,5210
-
-# Notion
+# Notion (required)
 NOTION_API_KEY=secret_xxx
 NOTION_ROADWORKS_DB_ID=xxx
-NOTION_TRAFFIC_ORDERS_DB_ID=xxx
 
-# Anthropic (for cycling relevance classification)
+# Anthropic (optional — for Claude cycling impact summaries on high/medium works)
 ANTHROPIC_API_KEY=sk-ant-xxx
-
-# Street Manager (if authenticated API access is used for backfill)
-STREET_MANAGER_API_EMAIL=xxx
-STREET_MANAGER_API_PASSWORD=xxx
-
-# D-TRO
-DTRO_API_KEY=xxx
 
 # App
 WEBHOOK_PATH=/webhook/street-manager
 LOG_LEVEL=INFO
+
+# Set automatically by Railway — do not set manually
+# PORT=8080
 ```
+
+**Removed from original spec:** `BOROUGH_SWA_CODES` (hardcoded in config.py), `STREET_MANAGER_API_EMAIL`/`PASSWORD` (not needed for SNS), `DTRO_API_KEY` (Phase 2), `NOTION_TRAFFIC_ORDERS_DB_ID` (Phase 2).
 
 ---
 
@@ -237,78 +278,41 @@ LOG_LEVEL=INFO
 
 ### 4.1 Two-Tier Filter
 
+Implemented in `src/geo/filter.py`:
+
 ```python
-# Pseudocode
+class GeoFilter:
+    def check(self, object_data: dict) -> tuple[bool, str]:
+        """Returns (should_include, borough_name)."""
 
-def should_include(notification: dict) -> tuple[bool, str]:
-    """
-    Returns (include: bool, borough: str) for a Street Manager notification.
-    """
-    ha_swa = notification["object_data"]["highway_authority_swa_code"]
+        # Fast path: highway authority IS one of our target boroughs
+        ha_swa = object_data.get("highway_authority_swa_code", "")
+        if ha_swa in self._swa_to_borough:
+            return True, self._swa_to_borough[ha_swa]
 
-    # Fast path: if the highway authority IS one of our target boroughs
-    if ha_swa in BOROUGH_SWA_CODES:
-        borough = SWA_TO_BOROUGH[ha_swa]
-        return True, borough
+        # Geo path: for TfL roads, cross-boundary utility works, etc.
+        coords_wkt = object_data.get("works_location_coordinates")
+        if not coords_wkt:
+            return False, ""
 
-    # Geo path: for TfL roads, utility works, etc.
-    coords_wkt = notification["object_data"].get("works_location_coordinates")
-    if not coords_wkt:
+        point = parse_bng_wkt_to_wgs84(coords_wkt)
+        if point is None:
+            return False, ""
+
+        for borough_name, polygon in self._polygons.items():
+            if polygon.contains(point):
+                return True, borough_name
+
         return False, ""
-
-    point = parse_bng_wkt_to_wgs84(coords_wkt)
-
-    # Check against each borough polygon individually (not the union)
-    # so we can tag which borough it falls in
-    for borough_name, polygon in BOROUGH_POLYGONS.items():
-        if polygon.contains(point):
-            return True, borough_name
-
-    return False, ""
 ```
 
 ### 4.2 Coordinate Conversion
 
-Street Manager uses BNG (EPSG:27700). Convert to WGS84 for matching against borough boundaries:
-
-```python
-from pyproj import Transformer
-import re
-
-transformer = Transformer.from_crs("EPSG:27700", "EPSG:4326", always_xy=True)
-
-def parse_bng_wkt_to_wgs84(wkt: str) -> Point:
-    """Parse 'POINT(527155.33 182227.95)' from BNG to WGS84 Point."""
-    match = re.match(r"POINT\(([\d.]+)\s+([\d.]+)\)", wkt)
-    easting, northing = float(match.group(1)), float(match.group(2))
-    lon, lat = transformer.transform(easting, northing)
-    return Point(lon, lat)
-```
+Implemented in `src/geo/filter.py`. Tested with real coordinates — Brixton Road correctly resolves to Lambeth, Borough High Street to Southwark, etc.
 
 ### 4.3 Borough Boundary Loading
 
-```python
-import json
-from shapely.geometry import shape
-
-def load_borough_polygons(geojson_path: str, target_boroughs: list[str]) -> dict:
-    """Load target borough polygons from a London boroughs GeoJSON file."""
-    with open(geojson_path) as f:
-        data = json.load(f)
-
-    polygons = {}
-    for feature in data["features"]:
-        # Property name varies by source — adapt as needed
-        name = feature["properties"].get("name") or feature["properties"].get("NAME")
-        if name in target_boroughs:
-            polygons[name] = shape(feature["geometry"])
-
-    missing = set(target_boroughs) - set(polygons.keys())
-    if missing:
-        raise ValueError(f"Boroughs not found in GeoJSON: {missing}")
-
-    return polygons
-```
+Implemented in `src/geo/boundaries.py`. Handles multiple GeoJSON property key naming conventions (`NAME`, `name`, `LAD24NM`, etc.) with case-insensitive matching.
 
 ---
 
@@ -316,73 +320,17 @@ def load_borough_polygons(geojson_path: str, target_boroughs: list[str]) -> dict
 
 ### 5.1 Rule-Based Pre-Filter
 
-Before calling Claude API (which costs money), apply simple rules:
+Implemented in `src/classifier/rules.py`, unchanged from spec.
 
-```python
-HIGH_IMPACT_TRAFFIC_MGMT = {
-    "road_closure",
-    "lane_closure",
-}
+### 5.2 Claude API Enrichment
 
-MEDIUM_IMPACT_TRAFFIC_MGMT = {
-    "multi_way_signals",
-    "two_way_signals",
-    "convoy_working",
-    "give_and_take",
-}
-
-LOW_IMPACT_TRAFFIC_MGMT = {
-    "some_carriageway_restriction",
-    "no_carriageway_restriction",
-}
-
-def quick_cycling_impact(notification: dict) -> str:
-    """Returns 'high', 'medium', 'low', or 'minimal'."""
-    tm = notification["object_data"].get("traffic_management_type_ref", "")
-    cat = notification["object_data"].get("work_category_ref", "")
-    loc = notification["object_data"].get("works_location_type", "")
-
-    # Footway-only works are usually minimal impact for cycling
-    if loc == "Footway" and tm in LOW_IMPACT_TRAFFIC_MGMT:
-        return "minimal"
-
-    if tm in HIGH_IMPACT_TRAFFIC_MGMT:
-        return "high"
-    elif tm in MEDIUM_IMPACT_TRAFFIC_MGMT:
-        return "medium"
-    elif cat in ("immediate_urgent", "immediate_emergency"):
-        return "medium"  # Emergency works are unpredictable
-    else:
-        return "low"
-```
-
-### 5.2 Claude API Enrichment (Optional, for High/Medium Impact Only)
-
-For roadworks classified as high or medium impact, optionally call Claude to generate a brief cycling-relevant summary:
-
-```python
-CLASSIFICATION_PROMPT = """You are helping a cycling advocacy group understand the impact of roadworks.
-
-Given this roadwork notification, write a 1-2 sentence summary of how it affects people cycling in the area. Consider: whether the road is a common cycling route, whether alternative routes exist, whether the traffic management creates pinch points, and whether temporary arrangements are cycle-friendly.
-
-Street: {street_name}, {area_name}
-Borough: {borough}
-Work type: {activity_type}
-Traffic management: {traffic_management_type}
-Duration: {proposed_start_date} to {proposed_end_date}
-Category: {work_category}
-Promoter: {promoter_organisation}
-
-Reply with ONLY the summary, no preamble."""
-```
-
-**Cost control:** Only call this for high/medium impact works. That should be a small fraction of total notifications. Budget roughly 500 tokens per call, ~£0.001 per classification with Haiku.
+Implemented in `src/classifier/claude.py`. Uses Claude Haiku (`claude-haiku-4-5-20251001`) for cost control. Only called for high/medium impact works. Returns `None` if `ANTHROPIC_API_KEY` is not configured — the feature is fully optional.
 
 ---
 
 ## 6. Notion Database Schemas
 
-### 6.1 Roadworks Database
+### 6.1 Roadworks Database — DONE
 
 | Property | Type | Description |
 |----------|------|-------------|
@@ -401,7 +349,6 @@ Reply with ONLY the summary, no preamble."""
 | Proposed Start | Date | Planned start date |
 | Proposed End | Date | Planned end date |
 | Actual Start | Date | When work actually started |
-| Actual End | Date | When work actually ended |
 | Cycling Impact | Select | High / Medium / Low / Minimal |
 | Cycling Summary | Rich text | Claude-generated summary (if applicable) |
 | Activity Type | Rich text | e.g. "Utility repair and maintenance works" |
@@ -409,6 +356,8 @@ Reply with ONLY the summary, no preamble."""
 | Coordinates | Rich text | WGS84 lon,lat for reference |
 | Last Updated | Date | When this record was last updated from Street Manager |
 | Source Event | Rich text | Last event_type that triggered an update |
+
+**Note:** "Actual End" from the original spec is not currently populated — Street Manager `WORK_STOP` events may not include this field in the SNS notification payload. Will be added once we can verify the actual data format from live notifications.
 
 **Notion views to create manually:**
 
@@ -421,7 +370,7 @@ Reply with ONLY the summary, no preamble."""
 - **Road Closures** — filter: Traffic Management is "Road closure", Work Status is not "Completed"
 - **This Week** — filter: Proposed Start is within this week
 
-### 6.2 Traffic Orders Database (Phase 2 — D-TRO)
+### 6.2 Traffic Orders Database (Phase 2 — D-TRO) — NOT STARTED
 
 | Property | Type | Description |
 |----------|------|-------------|
@@ -444,67 +393,63 @@ Reply with ONLY the summary, no preamble."""
 
 ## 7. Implementation Plan
 
-### Phase 1: Street Manager Integration (MVP)
+### Phase 1: Street Manager Integration (MVP) — DONE
 
-1. **Project setup**
-   - Python project with pyproject.toml or requirements.txt
-   - Dependencies: `fastapi`, `uvicorn`, `httpx`, `shapely`, `pyproj`, `notion-client`, `anthropic`, `schedule` (or `apscheduler`)
-   - Environment variable configuration via `pydantic-settings` or similar
+All items complete. Awaiting Street Manager SNS subscription confirmation only.
 
-2. **Borough boundary loader**
-   - Download London boroughs GeoJSON (include in repo as `data/london_boroughs.geojson`)
-   - Load and filter to target boroughs at startup
-   - Test with known coordinates (e.g. Brixton Road should be in Lambeth)
+1. **Project setup** — DONE
+   - Python project with `pyproject.toml` and Dockerfile
+   - Dependencies: `fastapi`, `uvicorn`, `httpx`, `shapely`, `pyproj`, `notion-client==2.2.1`, `anthropic`, `pydantic-settings`, `cryptography`
+   - Environment variable configuration via `pydantic-settings`
 
-3. **SNS webhook receiver**
-   - FastAPI app with a POST endpoint at `/webhook/street-manager`
-   - Handle SNS subscription confirmation (respond to SubscribeURL)
-   - Handle SNS notification messages
-   - Parse the nested JSON message body
-   - Pass to filter pipeline
+2. **Borough boundary loader** — DONE
+   - Downloaded from ONS Open Geography Portal (ArcGIS API, GeoJSON format)
+   - 8 boroughs loaded and verified with real coordinate tests
 
-4. **Geo-filter pipeline**
-   - Two-tier filter as described in Section 4
-   - SWA code lookup table for target boroughs
-   - BNG to WGS84 coordinate conversion
-   - Point-in-polygon check against borough boundaries
+3. **SNS webhook receiver** — DONE
+   - FastAPI app with POST endpoint at `/webhook/street-manager`
+   - SNS subscription confirmation (auto-fetches SubscribeURL)
+   - SNS message signature verification (cryptographic, using AWS signing certificates)
+   - Filters to relevant event types only
 
-5. **Deduplication**
-   - Track seen `permit_reference_number` + `version` pairs
-   - On update events, update existing Notion records rather than creating duplicates
-   - Store mapping of permit_reference → Notion page ID (persist to JSON file or Railway volume)
+4. **Geo-filter pipeline** — DONE
+   - Two-tier filter: SWA code fast path + BNG→WGS84 point-in-polygon
+   - Tested with real borough boundaries (Brixton Road→Lambeth, Borough High Street→Southwark, Canary Wharf→rejected)
 
-6. **Notion writer**
-   - Create/update pages in the Roadworks database
-   - Map notification fields to Notion properties
-   - Handle the title field (combine street_name + area_name)
-   - Use permit_reference as the dedup key
+5. **Deduplication** — DONE
+   - In-memory cache of `permit_reference → Notion page_id`, warmed from Notion at startup
+   - Falls back to Notion query on cache miss
+   - Creates new pages or updates existing ones based on permit reference
 
-7. **Cycling impact classifier**
-   - Rule-based quick classification
-   - Optional Claude API enrichment for high/medium items
+6. **Notion writer** — DONE
+   - Upsert with dedup query
+   - Property mapping for all schema fields
 
-8. **Deployment to Railway**
-   - Dockerfile or nixpacks config
-   - Environment variables
-   - Health check endpoint
-   - Logging to stdout
+7. **Cycling impact classifier** — DONE
+   - Rule-based quick classification (all works)
+   - Optional Claude Haiku enrichment (high/medium impact only)
 
-### Phase 2: D-TRO Integration
+8. **Deployment to Railway** — DONE
+   - Dockerfile with dynamic `$PORT` binding
+   - Health check endpoint at `/health`
+   - `railway.json` for healthcheck config
+
+### Phase 2: D-TRO Integration — NOT STARTED
 
 1. Explore the D-TRO API at https://d-tro.dft.gov.uk
-2. Understand query capabilities and data format
-3. Implement scheduled polling (daily)
+2. Verify data availability for London boroughs before building
+3. Implement scheduled polling (daily) — will need `apscheduler` added at this point
 4. Geo-filter D-TRO records against borough boundaries
 5. Write to Traffic Orders Notion database
 6. Add Claude classification for cycling relevance of traffic orders
 
-### Phase 3: Enhancements
+### Phase 3: Enhancements — NOT STARTED
 
 - **USRN enrichment:** Build a lookup of key cycling routes by USRN, flag works on these routes as automatically high-priority
 - **Historical analysis:** Aggregate data over time to identify most-disrupted roads per borough (à la Chris Carlon's analysis)
 - **Notification emails:** Send weekly digest or instant alerts for high-impact works to borough group mailing lists
 - **Web dashboard:** Simple public page showing active high-impact works on a map (could be a static site on Vercel)
+- **Agenda integration:** The lambeth-cyclists-claude email bot (separate project at `C:\Users\charl\ClaudeProjects\lambeth-cyclists-claude`) could pull from this Notion database when generating meeting agendas
 
 ---
 
@@ -512,11 +457,11 @@ Reply with ONLY the summary, no preamble."""
 
 ### Why SNS push rather than polling?
 
-Street Manager's open data service uses AWS SNS for near-real-time notifications. This is better than polling because you get updates within minutes rather than hours, and you don't need to manage pagination or track what you've already seen. The downside is you need a publicly accessible HTTPS endpoint, but Railway provides this.
+Street Manager's open data service uses AWS SNS for near-real-time notifications. **This is the only open data access method** — the REST API (`GET /works/updates`) requires an authenticated organizational account (highway authority/utility company role), which is not available to open data consumers. Railway provides the public HTTPS endpoint for SNS delivery; no AWS account is needed.
 
 ### Why not use OS Data Hub?
 
-The OS Data Hub would add a runtime API dependency, rate limits, and an API key to manage. Since we only need borough boundary polygons (which are static data), downloading them once from the London Datastore or OS Boundary-Line is simpler and more reliable.
+The OS Data Hub would add a runtime API dependency, rate limits, and an API key to manage. Since we only need borough boundary polygons (which are static data), downloading them once from the ONS Open Geography Portal is simpler and more reliable.
 
 ### Why Notion rather than a database?
 
@@ -526,29 +471,35 @@ Notion is already the Lambeth Cyclists workspace. The whole point is to put this
 
 A simple rule-based classifier handles most cases, but some works benefit from contextual understanding — e.g. knowing that a "minor" work with "some carriageway restriction" on a narrow one-lane street is actually high impact for cycling, or that a road closure on a quiet residential street matters less than one on a main cycling corridor. Claude can provide this nuance. But it's optional and only used for high/medium impact works to control costs.
 
+### Why notion-client v2.2.1?
+
+The `notion-client` Python package removed `databases.query()` in versions after 2.2.x. This method is essential for querying the Notion database by permit reference (for deduplication). Pinned to v2.2.1 to match the version used by the lambeth-cyclists-claude project.
+
 ### Coordinate system handling
 
-Street Manager uses British National Grid (EPSG:27700) throughout. Most publicly available borough boundary data is in WGS84 (EPSG:4326). Rather than converting boundaries to BNG, convert incoming coordinates to WGS84 using pyproj — this is a well-understood, one-line transformation and means our stored coordinates are in the more universally useful WGS84 format.
+Street Manager uses British National Grid (EPSG:27700) throughout. Borough boundaries from ONS are in WGS84 (EPSG:4326). Incoming coordinates are converted to WGS84 using pyproj at processing time, and stored in WGS84 format in Notion.
 
 ---
 
-## 9. Registration Steps (Manual, Before Implementation)
+## 9. Registration Steps
 
-These must be done by Charlie before the daemon can be deployed:
-
-1. **Street Manager Open Data:** Register at https://www.manage-roadworks.service.gov.uk/open-data-onboarding — provide the Railway webhook URL once the app is deployed
-2. **D-TRO Service:** Register at https://d-tro.dft.gov.uk — explore available data for London boroughs
-3. **Notion Integration:** Create a new integration at https://www.notion.so/my-integrations — give it access to the Lambeth Cyclists workspace. Create the two databases (Roadworks, Traffic Orders) with the schemas above and share them with the integration.
-4. **Anthropic API Key:** Use existing key from Lambeth Cyclists infrastructure (or the shared AI Club key if applicable)
+| Step | Status | Notes |
+|------|--------|-------|
+| Street Manager Open Data | SUBMITTED 8 Mar 2026 | Awaiting confirmation (up to 1 working day). Endpoint: `https://lambeth-cyclists-street-manager-production.up.railway.app/webhook/street-manager` |
+| Notion Integration | DONE | Integration created, Roadworks database shared with it |
+| Notion Roadworks Database | DONE | Created with schema from Section 6.1 |
+| Anthropic API Key | DONE | Configured in Railway env vars |
+| D-TRO Service registration | NOT STARTED | Phase 2 |
+| Notion Traffic Orders Database | NOT STARTED | Phase 2 |
 
 ---
 
 ## 10. SWA Code Reference
 
-Borough SWA codes for fast-path filtering (verify these — they may need updating):
+Borough SWA codes for fast-path filtering (**still need verification against live Street Manager data**):
 
-| Borough | SWA Code (approx) |
-|---------|-------------------|
+| Borough | SWA Code |
+|---------|----------|
 | Lambeth | 5540 |
 | Southwark | 5630 |
 | Wandsworth | 5690 |
@@ -557,79 +508,86 @@ Borough SWA codes for fast-path filtering (verify these — they may need updati
 | Croydon | 5210 |
 | City of London | 5110 |
 | Westminster | 5990 |
-| Transport for London | 0999 (verify) |
+| Transport for London | 0999 |
 
-**Important:** These codes should be verified against the Street Manager lookup API or registration data before going live. The lookup endpoint is available in the Street Manager API.
+These are hardcoded in `src/config.py`. Once live notifications arrive, we can verify them against actual data and update if needed. The geo-filter (point-in-polygon) catches any works that slip through due to incorrect SWA codes, so incorrect codes only affect performance (extra geo-lookups), not correctness.
 
 ---
 
 ## 11. Error Handling & Resilience
 
-- **SNS delivery failures:** AWS SNS retries up to 20 times over approximately one hour. If the webhook is down longer than that, use the polling endpoint (`GET /works/updates`) to backfill missed events.
-- **Notion API rate limits:** The Notion API has rate limits (currently 3 requests/second). Implement exponential backoff. Batch updates where possible.
-- **Malformed notifications:** Log and skip any notifications that can't be parsed. Don't crash the process.
-- **Startup recovery:** On restart, check the polling endpoint for any events missed since the last known event timestamp (store this in a local file).
-- **Health check:** Expose a `GET /health` endpoint that returns 200 if the process is running. Railway can use this for monitoring.
+- **SNS delivery failures:** AWS SNS retries up to 20 times over approximately one hour. The app is designed to always return 200 for valid (signed) messages, even if downstream processing fails, to prevent SNS from retrying already-processed messages.
+- **SNS signature verification:** All incoming messages are cryptographically verified against AWS signing certificates. Unsigned or spoofed requests are rejected with 403.
+- **Notion API rate limits:** The Notion API has rate limits (currently 3 requests/second). Basic backoff implemented on failure.
+- **Malformed notifications:** Logged and skipped. The process never crashes on bad input.
+- **Startup resilience:** If Notion cache warming or borough boundary loading fails, the app still starts in "degraded" mode — the health endpoint responds, but notifications won't be processed. This prevents Railway from entering a restart loop.
+- **Health check:** `GET /health` returns status (`ok`, `starting`, or `degraded`), uptime, last notification timestamp, and notification count.
 
 ---
 
-## 12. Project Structure
+## 12. Project Structure (Actual)
 
 ```
-south-london-street-works-monitor/
-├── README.md
+lambeth-cyclists-street-manager/
+├── south-london-street-works-monitor.md   # This document
 ├── pyproject.toml
 ├── Dockerfile
+├── railway.json
 ├── .env.example
+├── .gitignore
 ├── data/
-│   └── london_boroughs.geojson      # Static borough boundary data
+│   └── london_boroughs.geojson            # 8 borough boundaries from ONS (static)
 ├── src/
 │   ├── __init__.py
-│   ├── main.py                       # FastAPI app + scheduled jobs
-│   ├── config.py                     # Pydantic settings from env vars
+│   ├── main.py                            # FastAPI app, lifespan, /health endpoint
+│   ├── config.py                          # Pydantic settings, SWA code mapping
+│   ├── pipeline.py                        # Notification processing pipeline
 │   ├── geo/
 │   │   ├── __init__.py
-│   │   ├── boundaries.py             # Borough polygon loading
-│   │   └── filter.py                 # Two-tier geo-filter
+│   │   ├── boundaries.py                  # Borough polygon loading from GeoJSON
+│   │   └── filter.py                      # Two-tier geo-filter + BNG→WGS84
 │   ├── street_manager/
 │   │   ├── __init__.py
-│   │   ├── webhook.py                # SNS webhook handler
-│   │   ├── parser.py                 # Notification parsing
-│   │   └── poller.py                 # Fallback polling endpoint
-│   ├── dtro/
-│   │   ├── __init__.py
-│   │   └── client.py                 # D-TRO API client (Phase 2)
+│   │   ├── webhook.py                     # SNS webhook handler
+│   │   └── sns_verify.py                  # SNS message signature verification
 │   ├── classifier/
 │   │   ├── __init__.py
-│   │   ├── rules.py                  # Rule-based impact classification
-│   │   └── claude.py                 # Claude API enrichment
-│   ├── notion/
-│   │   ├── __init__.py
-│   │   ├── writer.py                 # Notion database operations
-│   │   └── schemas.py                # Property mappings
-│   └── state/
+│   │   ├── rules.py                       # Rule-based cycling impact classification
+│   │   └── claude.py                      # Claude Haiku enrichment (optional)
+│   └── notion/
 │       ├── __init__.py
-│       └── dedup.py                  # Deduplication + permit→page ID mapping
+│       ├── writer.py                      # Notion upsert with dedup
+│       └── schemas.py                     # Work data → Notion property mapping
 ├── tests/
-│   ├── test_geo_filter.py
-│   ├── test_parser.py
-│   ├── test_classifier.py
+│   ├── __init__.py
+│   ├── test_geo_filter.py                 # BNG conversion + filter tests
+│   ├── test_classifier.py                 # Rule-based classifier tests
+│   ├── test_webhook.py                    # SNS webhook + signature tests
+│   ├── test_notion_schemas.py             # Property mapping tests
+│   ├── test_integration.py                # Real boundary data tests
 │   └── fixtures/
 │       ├── sample_permit_notification.json
-│       └── sample_activity_notification.json
-└── scripts/
-    └── backfill.py                   # One-off script to backfill from polling endpoint
+│       └── sample_tfl_notification.json
+└── scripts/                               # (empty — may be used for backfill later)
 ```
 
 ---
 
 ## 13. Testing Strategy
 
-- **Unit tests for geo-filtering:** Known coordinates on Brixton Road (TfL/TLRN, should match Lambeth), Streatham High Road (should match Lambeth), Borough High Street (should match Southwark), Wandsworth Bridge Road (should match Wandsworth). Also test coordinates outside all target boroughs (should be rejected).
-- **Unit tests for notification parsing:** Use sample payloads from Street Manager documentation.
-- **Unit tests for classification rules:** Various traffic management types and work categories.
-- **Integration test with Notion:** Create a test database, write a record, verify fields, delete it.
-- **End-to-end:** Simulate an SNS notification POST to the webhook, verify it flows through to a Notion record.
+32 tests passing. Coverage:
+
+- **Geo-filtering (11 tests):** BNG→WGS84 conversion with known coordinates, SWA code fast path, point-in-polygon with real borough boundaries (Brixton Road→Lambeth, Borough High Street→Southwark, Streatham→Lambeth, Croydon town centre→Croydon), rejection of coordinates outside target area (Canary Wharf, Islington).
+- **Classification (8 tests):** All traffic management types, emergency works, footway vs carriageway, unknown types.
+- **Webhook (6 tests):** Health endpoint, valid notifications, irrelevant events, malformed body, unsigned message rejection, unknown SNS types.
+- **Notion schemas (3 tests):** Basic property mapping, missing fields, optional fields omitted.
+- **Integration (4 tests):** Real boundary data loading, real coordinate matching.
+
+---
+
+## 14. Related Projects
+
+- **lambeth-cyclists-claude** (`C:\Users\charl\ClaudeProjects\lambeth-cyclists-claude`): Email bot that monitors Gmail and writes to Notion. Uses the same stack (Python, notion-client, anthropic, Railway). Future enhancement: its agenda generation module could query the Roadworks Notion database from this project to include upcoming roadworks in meeting agendas.
 
 ---
 
@@ -638,10 +596,11 @@ south-london-street-works-monitor/
 - Street Manager docs: https://department-for-transport-streetmanager.github.io/street-manager-docs/
 - Street Manager open data: https://department-for-transport-streetmanager.github.io/street-manager-docs/open-data/
 - Street Manager API notifications: https://department-for-transport-streetmanager.github.io/street-manager-docs/api-notifications/
+- Street Manager helpdesk: https://streetmanager.atlassian.net/servicedesk/customer/portals
 - Street Manager Python client: https://github.com/cogna-public/streetmanager
 - D-TRO GitHub: https://github.com/department-for-transport-public/D-TRO
 - D-TRO service: https://d-tro.dft.gov.uk
+- ONS Open Geography Portal: https://geoportal.statistics.gov.uk/
 - London Datastore boundaries: https://data.london.gov.uk/dataset/statistical-gis-boundary-files-london
-- OS Boundary-Line: https://www.ordnancesurvey.co.uk/products/boundary-line
 - Chris Carlon's Street Works analysis (inspiration): https://www.ccarlon.dev/blog/street_works/
 - Transport select committee report on street works: https://publications.parliament.uk/pa/cm5901/cmselect/cmtrans/522/report.html
