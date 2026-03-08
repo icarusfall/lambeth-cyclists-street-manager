@@ -1,6 +1,7 @@
 """Tests for the SNS webhook handler."""
 
 import json
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +12,18 @@ from src.main import app
 @pytest.fixture
 def client():
     return TestClient(app, raise_server_exceptions=False)
+
+
+async def _mock_verify_true(body):
+    return True
+
+
+def _patch_signature_verification():
+    """Patch SNS signature verification to always pass in tests."""
+    return patch(
+        "src.street_manager.webhook.verify_sns_signature",
+        side_effect=_mock_verify_true,
+    )
 
 
 class TestSnsWebhook:
@@ -38,7 +51,8 @@ class TestSnsWebhook:
             "MessageId": "test-123",
             "TopicArn": "arn:aws:sns:eu-west-2:287813576808:prod-permit-topic",
         }
-        resp = client.post("/webhook/street-manager", json=sns_message)
+        with _patch_signature_verification():
+            resp = client.post("/webhook/street-manager", json=sns_message)
         assert resp.status_code == 200
 
     def test_irrelevant_event_skipped(self, client):
@@ -52,7 +66,8 @@ class TestSnsWebhook:
             "Type": "Notification",
             "Message": json.dumps(notification),
         }
-        resp = client.post("/webhook/street-manager", json=sns_message)
+        with _patch_signature_verification():
+            resp = client.post("/webhook/street-manager", json=sns_message)
         assert resp.status_code == 200
 
     def test_malformed_body_returns_400(self, client):
@@ -63,8 +78,15 @@ class TestSnsWebhook:
         )
         assert resp.status_code == 400
 
-    def test_unknown_sns_type_returns_200(self, client):
-        """Unknown message types should be accepted gracefully."""
-        sns_message = {"Type": "SomethingNew"}
+    def test_unsigned_message_rejected(self, client):
+        """Messages without valid SNS signatures should be rejected."""
+        sns_message = {"Type": "Notification", "Message": "{}"}
         resp = client.post("/webhook/street-manager", json=sns_message)
+        assert resp.status_code == 403
+
+    def test_unknown_sns_type_returns_200(self, client):
+        """Unknown message types with valid signatures should be accepted."""
+        sns_message = {"Type": "SomethingNew"}
+        with _patch_signature_verification():
+            resp = client.post("/webhook/street-manager", json=sns_message)
         assert resp.status_code == 200

@@ -17,6 +17,7 @@ dependencies = [
     "anthropic>=0.42.0",
     "pydantic-settings>=2.7",
     "python-dotenv>=1.0",
+    "cryptography>=43.0",
 ]
 
 [tool.hatch.build.targets.wheel]

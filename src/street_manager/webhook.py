@@ -6,6 +6,8 @@ import logging
 import httpx
 from fastapi import APIRouter, Request, Response
 
+from src.street_manager.sns_verify import verify_sns_signature
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -109,6 +111,11 @@ async def sns_webhook(request: Request) -> Response:
     except json.JSONDecodeError:
         logger.warning("Could not parse request body as JSON")
         return Response(status_code=400)
+
+    # Verify SNS message signature to prevent spoofed requests
+    if not await verify_sns_signature(body):
+        logger.warning("Rejected message with invalid SNS signature")
+        return Response(status_code=403)
 
     message_type = body.get("Type", "")
 
