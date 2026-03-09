@@ -75,3 +75,17 @@ class GeoFilter:
                 return True, borough_name
 
         return False, ""
+
+    def check_wgs84_point(self, point: Point) -> tuple[bool, str]:
+        """Check whether a WGS84 point falls within a target borough.
+
+        Args:
+            point: Shapely Point(lon, lat) in WGS84.
+
+        Returns:
+            (should_include, borough_name). borough_name is empty if excluded.
+        """
+        for borough_name, polygon in self._polygons.items():
+            if polygon.contains(point):
+                return True, borough_name
+        return False, ""

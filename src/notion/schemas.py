@@ -142,3 +142,83 @@ def work_to_notion_properties(
         props["Coordinates"] = _rich_text(wgs84_coords)
 
     return props
+
+
+# TfL disruption categories (from live API observation)
+_DISRUPTION_CATEGORY_LABELS = {
+    "Works": "Works",
+    "Collisions": "Collisions",
+    "Hazards": "Hazards",
+    "Network delays": "Network delays",
+    "Asset issues": "Asset issues",
+    "Breakdowns": "Breakdowns",
+    "Planned events": "Planned events",
+}
+
+_DISRUPTION_STATUS_LABELS = {
+    "Active": "Active",
+    "Scheduled": "Scheduled",
+    "Resolved": "Resolved",
+}
+
+
+def disruption_to_notion_properties(
+    disruption: dict,
+    borough: str,
+    cycling_impact: str,
+    cycling_summary: str | None = None,
+    wgs84_coords: str | None = None,
+) -> dict:
+    """Convert a TfL disruption to Notion page properties.
+
+    Args:
+        disruption: The disruption dict from the TfL API.
+        borough: Matched borough name from geo-filtering.
+        cycling_impact: "high", "medium", "low", or "minimal".
+        cycling_summary: Claude-generated summary, or None.
+        wgs84_coords: Optional "lon,lat" string for reference.
+
+    Returns:
+        Dict of Notion property values ready for the API.
+    """
+    location = disruption.get("location", "Unknown location")
+    category = disruption.get("category", "Other")
+    title = f"{location} — {category}"
+
+    status = disruption.get("status", "Active")
+    sub_category = disruption.get("subCategory", "")
+    severity = disruption.get("severity", "")
+    comments = disruption.get("comments", "") or ""
+    corridors_list = disruption.get("corridors", []) or []
+    corridors = ", ".join(
+        c.get("name", "") for c in corridors_list if isinstance(c, dict)
+    ) if corridors_list else ""
+
+    props = {
+        "Name": _title(title),
+        "TfL Disruption ID": _rich_text(str(disruption.get("id", ""))),
+        "Borough": _select(borough),
+        "Category": _select(
+            _DISRUPTION_CATEGORY_LABELS.get(category, category or "Other")
+        ),
+        "Sub-Category": _rich_text(sub_category),
+        "Status": _select(
+            _DISRUPTION_STATUS_LABELS.get(status, status or "Active")
+        ),
+        "Severity": _rich_text(severity),
+        "Location": _rich_text(location),
+        "Corridors": _rich_text(corridors),
+        "Start Time": _date(disruption.get("startDateTime")),
+        "End Time": _date(disruption.get("endDateTime")),
+        "Description": _rich_text(comments[:2000]),
+        "Cycling Impact": _select(cycling_impact.capitalize()),
+        "Last Updated": _date(datetime.utcnow().isoformat()),
+    }
+
+    if cycling_summary:
+        props["Cycling Summary"] = _rich_text(cycling_summary)
+
+    if wgs84_coords:
+        props["Coordinates"] = _rich_text(wgs84_coords)
+
+    return props
