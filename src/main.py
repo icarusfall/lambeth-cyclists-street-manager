@@ -86,15 +86,25 @@ async def lifespan(app: FastAPI):
 
 
 async def _keep_alive():
-    """Ping our own health endpoint every 5 minutes to prevent Railway sleep."""
-    # Build our own URL from Railway's environment
-    port = os.environ.get("PORT", "8000")
-    url = f"http://localhost:{port}/health"
+    """Ping our own health endpoint every 5 minutes to prevent Railway sleep.
+
+    Uses the public URL so Railway counts it as external traffic.
+    Falls back to localhost if RAILWAY_PUBLIC_DOMAIN is not set.
+    """
+    public_domain = os.environ.get(
+        "RAILWAY_PUBLIC_DOMAIN",
+        "lambeth-cyclists-street-manager-production.up.railway.app",
+    )
+    url = f"https://{public_domain}/health"
+
+    logger.info("Keep-alive will ping: %s", url)
+
     async with httpx.AsyncClient() as client:
         while True:
             await asyncio.sleep(300)  # 5 minutes
             try:
-                await client.get(url, timeout=10)
+                resp = await client.get(url, timeout=10)
+                logger.debug("Keep-alive ping: %s", resp.status_code)
             except Exception:
                 pass  # Non-critical — just a keep-alive
 
