@@ -485,7 +485,7 @@ Street Manager uses British National Grid (EPSG:27700) throughout. Borough bound
 
 | Step | Status | Notes |
 |------|--------|-------|
-| Street Manager Open Data | SUBMITTED 8 Mar 2026 | Awaiting confirmation (up to 1 working day). Endpoint: `https://lambeth-cyclists-street-manager-production.up.railway.app/webhook/street-manager` |
+| Street Manager Open Data | SUBMITTED 8 Mar 2026 | Awaiting subscription confirmation POST from DfT. Endpoint: `https://lambeth-cyclists-street-manager-production.up.railway.app/webhook/street-manager`. Initial confirmation POST returned 502 due to port misconfiguration (now fixed). DfT helpdesk: https://streetmanager.atlassian.net/servicedesk/customer/portals |
 | Notion Integration | DONE | Integration created, Roadworks database shared with it |
 | Notion Roadworks Database | DONE | Created with schema from Section 6.1 |
 | Anthropic API Key | DONE | Configured in Railway env vars |
@@ -517,7 +517,8 @@ These are hardcoded in `src/config.py`. Once live notifications arrive, we can v
 ## 11. Error Handling & Resilience
 
 - **SNS delivery failures:** AWS SNS retries up to 20 times over approximately one hour. The app is designed to always return 200 for valid (signed) messages, even if downstream processing fails, to prevent SNS from retrying already-processed messages.
-- **SNS signature verification:** All incoming messages are cryptographically verified against AWS signing certificates. Unsigned or spoofed requests are rejected with 403.
+- **SNS signature verification:** All incoming messages are cryptographically verified against AWS signing certificates. Unsigned or spoofed requests are rejected with 403. Exception: `SubscriptionConfirmation` messages are processed even if signature verification fails, since the `SubscribeURL` is a one-time self-validating token.
+- **Request logging:** Every incoming POST is logged at INFO level with full headers and body, so requests can be reconstructed from deploy logs even if processing fails.
 - **Notion API rate limits:** The Notion API has rate limits (currently 3 requests/second). Basic backoff implemented on failure.
 - **Malformed notifications:** Logged and skipped. The process never crashes on bad input.
 - **Startup resilience:** If Notion cache warming or borough boundary loading fails, the app still starts in "degraded" mode — the health endpoint responds, but notifications won't be processed. This prevents Railway from entering a restart loop.
@@ -575,11 +576,11 @@ lambeth-cyclists-street-manager/
 
 ## 13. Testing Strategy
 
-32 tests passing. Coverage:
+33 tests passing. Coverage:
 
 - **Geo-filtering (11 tests):** BNG→WGS84 conversion with known coordinates, SWA code fast path, point-in-polygon with real borough boundaries (Brixton Road→Lambeth, Borough High Street→Southwark, Streatham→Lambeth, Croydon town centre→Croydon), rejection of coordinates outside target area (Canary Wharf, Islington).
 - **Classification (8 tests):** All traffic management types, emergency works, footway vs carriageway, unknown types.
-- **Webhook (6 tests):** Health endpoint, valid notifications, irrelevant events, malformed body, unsigned message rejection, unknown SNS types.
+- **Webhook (7 tests):** Health endpoint, valid notifications, irrelevant events, malformed body, unsigned message rejection, unknown SNS types, subscription confirmation signature bypass.
 - **Notion schemas (3 tests):** Basic property mapping, missing fields, optional fields omitted.
 - **Integration (4 tests):** Real boundary data loading, real coordinate matching.
 
