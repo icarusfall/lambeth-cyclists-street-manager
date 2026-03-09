@@ -3,8 +3,9 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
 
@@ -81,10 +82,7 @@ async def lifespan(app: FastAPI):
             poller_task = asyncio.create_task(
                 _tfl_disruptions_poller(geo_filter, notion_writer)
             )
-            logger.info(
-                "TfL disruptions poller started (every %ds)",
-                settings.tfl_poll_interval_seconds,
-            )
+            logger.info("TfL disruptions poller started (daily at 09:00 UK time)")
         else:
             logger.info("TfL disruptions poller not started — NOTION_DISRUPTIONS_DB_ID not set")
 
@@ -106,16 +104,37 @@ async def lifespan(app: FastAPI):
 async def _tfl_disruptions_poller(
     geo_filter: GeoFilter, notion_writer: NotionWriter
 ) -> None:
-    """Poll TfL disruptions on a recurring interval."""
-    interval = settings.tfl_poll_interval_seconds
+    """Poll TfL disruptions daily at 09:00 UK time.
+
+    Runs an initial poll on startup, then sleeps until the next 09:00.
+    """
+    uk_tz = ZoneInfo("Europe/London")
+
+    # Initial poll on startup
+    try:
+        count = await poll_disruptions(geo_filter, notion_writer)
+        _app_state["last_disruption_poll"] = datetime.now(timezone.utc).isoformat()
+        _app_state["disruptions_last_count"] = count
+    except Exception:
+        logger.exception("TfL disruptions initial poll failed")
+
     while True:
+        # Calculate seconds until next 09:00 UK time
+        now = datetime.now(uk_tz)
+        next_run = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        if now >= next_run:
+            # Already past 9am today, schedule for tomorrow
+            next_run = next_run + timedelta(days=1)
+        wait_seconds = (next_run - now).total_seconds()
+        logger.info("Next TfL disruptions poll at %s (in %.0f seconds)", next_run, wait_seconds)
+        await asyncio.sleep(wait_seconds)
+
         try:
             count = await poll_disruptions(geo_filter, notion_writer)
             _app_state["last_disruption_poll"] = datetime.now(timezone.utc).isoformat()
             _app_state["disruptions_last_count"] = count
         except Exception:
             logger.exception("TfL disruptions poll failed")
-        await asyncio.sleep(interval)
 
 
 app = FastAPI(

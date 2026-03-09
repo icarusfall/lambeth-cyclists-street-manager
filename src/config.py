@@ -38,7 +38,6 @@ class Settings(BaseSettings):
 
     # TfL (optional — works without key at lower rate limits)
     tfl_api_key: str = ""
-    tfl_poll_interval_seconds: int = 300  # 5 minutes
 
     # Anthropic (optional)
     anthropic_api_key: str = ""
