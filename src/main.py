@@ -1,10 +1,13 @@
 """FastAPI application — receives Street Manager SNS notifications and writes to Notion."""
 
+import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI
 
 from src.config import settings
@@ -72,9 +75,28 @@ async def lifespan(app: FastAPI):
 
     _app_state["started_at"] = datetime.now(timezone.utc).isoformat()
 
+    # Start keep-alive self-ping to prevent Railway from sleeping the container.
+    # Railway sleeps inactive containers, which would cause us to miss SNS notifications.
+    ping_task = asyncio.create_task(_keep_alive())
+
     yield
 
+    ping_task.cancel()
     logger.info("Shutting down")
+
+
+async def _keep_alive():
+    """Ping our own health endpoint every 5 minutes to prevent Railway sleep."""
+    # Build our own URL from Railway's environment
+    port = os.environ.get("PORT", "8000")
+    url = f"http://localhost:{port}/health"
+    async with httpx.AsyncClient() as client:
+        while True:
+            await asyncio.sleep(300)  # 5 minutes
+            try:
+                await client.get(url, timeout=10)
+            except Exception:
+                pass  # Non-critical — just a keep-alive
 
 
 app = FastAPI(
