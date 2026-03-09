@@ -26,10 +26,18 @@
 | 1 | Deployment to Railway | DONE |
 | 1 | Street Manager open data registration | SUBMITTED — awaiting confirmation (up to 1 working day) |
 | 1 | Notion Roadworks database created & connected | DONE |
-| 1 | Tests (32 passing) | DONE |
-| 2 | D-TRO integration | NOT STARTED |
-| 2 | Traffic Orders Notion database | NOT STARTED |
-| 3 | USRN enrichment, historical analysis, alerts, dashboard | NOT STARTED |
+| 1 | Tests (50 passing) | DONE |
+| 2 | TfL Live Disruptions API integration | DONE |
+| 2 | Disruptions Notion database | DONE |
+| 3 | STATS19 cycling collision data import | NOT STARTED |
+| 3 | Cycling Collisions Notion database | NOT STARTED |
+| 4 | D-TRO integration | NOT STARTED |
+| 4 | Traffic Orders Notion database | NOT STARTED |
+| 5 | TfL Cycling Infrastructure Database (CID) reference layer | NOT STARTED |
+| 5 | Classifier upgrade: CID-aware route importance scoring | NOT STARTED |
+| 6 | Planning London Datahub integration | NOT STARTED |
+| 6 | Development Activity Notion database | NOT STARTED |
+| 7 | USRN enrichment, historical analysis, alerts, dashboard, agenda integration | NOT STARTED |
 
 ### Changes from Original Spec
 
@@ -50,6 +58,12 @@
 8. **Borough boundaries sourced from ONS, not London Datastore.** The London Datastore provides shapefiles, not GeoJSON. Used the ONS Open Geography Portal ArcGIS API instead (`Local_Authority_Districts_December_2024_Boundaries_UK_BFE`), which provides GeoJSON directly. Property key for borough names is `LAD24NM`.
 
 9. **Removed planned files that weren't needed.** `parser.py`, `poller.py`, `state/dedup.py`, `dtro/client.py`, and `scripts/backfill.py` from the original structure were not created — the SNS architecture is simpler and doesn't need them. Added `pipeline.py` and `sns_verify.py` instead.
+
+10. **TfL disruption categories differ from spec.** The architecture doc assumed categories like `PlannedWork`, `RoadClosure`, `SpecialEvent`, `Incident`. The live API actually returns: `Works`, `Collisions`, `Hazards`, `Network delays`, `Asset issues`, `Breakdowns`, `Planned events`. Classifier and schema updated to match real data. Severities are: `Serious`, `Moderate`, `Minimal`.
+
+11. **TfL polling daily at 09:00, not every 5 minutes.** The original spec called for 5-minute polling. Changed to daily at 09:00 UK time (with an initial poll on startup) since disruption data doesn't change fast enough to justify 288 API calls per day. Uses `asyncio.sleep` to wait until the next 09:00 — no `apscheduler` dependency needed.
+
+12. **No `apscheduler` dependency.** The TfL poller uses a simple `asyncio` task with sleep-until-target-time logic instead of adding a scheduler dependency. This keeps the dependency footprint small and avoids configuration complexity.
 
 ---
 
@@ -173,6 +187,101 @@ This list is configurable via environment variable.
 
 **Coordinate systems:** Street Manager uses British National Grid (EPSG:27700). Borough boundaries are in WGS84 (EPSG:4326). Incoming BNG coordinates are converted to WGS84 using `pyproj` at processing time.
 
+### 2.4 TfL Live Traffic Disruptions API (Phase 2)
+
+**What:** Real-time feed of traffic disruptions monitored by TfL's 24/7 traffic control centre — accidents, incidents, roadworks, public events, protests, filming, emergency road closures. This catches disruptions that Street Manager does not cover (unplanned incidents, events, TfL-monitored roadworks reported separately).
+
+**API type:** REST API (TfL Unified API). JSON responses. Polls every 5 minutes.
+
+**Endpoint:** `https://api.tfl.gov.uk/Road/all/Disruption` (with optional `?app_key={KEY}`)
+
+**Registration:** Free API key at https://api-portal.tfl.gov.uk/ — gives 500 requests/minute. Works without a key at lower rate limits.
+
+**Status:** DONE. Polling daily at 09:00 UK time (+ on startup). Live-tested: ~35 disruptions in target boroughs from ~99 total.
+
+**Data format:** Each disruption includes:
+- `id` — unique disruption ID (e.g. "TIMS-225540")
+- `category` — observed values: "Works", "Collisions", "Hazards", "Network delays", "Asset issues", "Breakdowns", "Planned events"
+- `subCategory` — more specific cause
+- `status` — observed: "Active" (resolved disruptions drop off the feed)
+- `severity` — observed: "Serious", "Moderate", "Minimal"
+- `location` — text description (e.g. "[A23] STREATHAM HILL (SW16 ,SW2 ) (Lambeth)")
+- `geography` — GeoJSON geometry (Point or LineString) in WGS84
+- `corridors` — affected road corridors (array of objects with `name`)
+- `startDateTime`, `endDateTime` — timing
+- `comments` — free-text description of the disruption
+
+**Geo-filtering:** The `geography` field provides WGS84 coordinates, so the existing borough polygon containment check works directly (no BNG conversion needed). For LineString geometries, the centroid is used.
+
+**Why this is valuable:** Street Manager covers planned utility/highway works. TfL Disruptions covers everything else — burst water mains, traffic collisions, protests, marathon routes, filming, emergency bridge closures. Together they give near-complete coverage of anything disrupting cycling in south London.
+
+**Implementation:** An asyncio background task polls the TfL API daily at 09:00 UK time (with an initial poll on startup). Results are geo-filtered against borough polygons, classified for cycling impact, and upserted to the Notion Disruptions database. Dedup on TfL disruption `id`. When a disruption disappears from the feed, it is marked as "Resolved" in Notion.
+
+### 2.5 STATS19 Road Collision Data (Phase 3)
+
+**What:** Every road traffic collision in Great Britain reported to the police, including detailed information on casualties, vehicles involved, location, severity, and contributing factors. Published by the DfT as open data CSV files.
+
+**Data source:** https://www.gov.uk/government/statistical-data-sets/road-safety-open-data
+
+**Update frequency:** Annual final data published in late September. Provisional mid-year data (January–June) published in late November. Data for 2024 is available now; provisional H1 2025 data published November 2025.
+
+**Data files (CSV):**
+- Collisions — one row per collision, with coordinates (WGS84), date/time, severity, road type, speed limit, junction detail, weather, light conditions
+- Casualties — one row per person hurt/killed, with severity, age, sex, road user type (pedal cyclist = vehicle type 1), casualty class
+- Vehicles — one row per vehicle involved, with vehicle type, manoeuvre, driver age/sex, journey purpose
+
+**Filtering strategy:**
+1. Download the collisions CSV, filter to coordinates within the target borough polygons (same geo-filter reused)
+2. Join to casualties CSV, filter to `casualty_type = "Pedal Cyclist"` (or `vehicle_type = 1` in the vehicles table)
+3. This gives you every collision involving a cyclist in the target boroughs
+
+**Why this is valuable:** Collision data is the most powerful tool for cycling advocacy. It lets you show exactly where cyclists are being hurt, which junctions are dangerous, what vehicle types are involved, and how patterns change over time. Cross-referencing collision locations with active roadworks could also reveal whether roadworks are creating temporary danger spots.
+
+**Implementation:** A scheduled job that runs when new data is published (check quarterly). Downloads CSVs, filters, and populates a Cycling Collisions Notion database. Could also be run as a one-off backfill script for historical data.
+
+**Related tools:** The `stats19` R package (https://itsleeds.github.io/stats19/) provides helper functions for downloading and parsing this data, though a Python implementation is straightforward since the files are just CSVs.
+
+### 2.6 TfL Cycling Infrastructure Database — CID (Phase 5)
+
+**What:** Every piece of cycling infrastructure in London — 240,000 assets including cycle lanes/tracks (segregated and painted), cycle parking, modal filters, traffic calming, advanced stop lines, crossings, wayfinding signs, and restricted points. Surveyed street-by-street across all London boroughs.
+
+**Data source:** https://cycling.data.tfl.gov.uk/ (under CycleInfrastructure/) — JSON files per asset type. Also available via TfL Unified API `/Place` endpoint for cycle parking.
+
+**Schema documentation:** Available at the same URL under CycleInfrastructure/Documentation.
+
+**Update frequency:** Periodically updated by TfL as infrastructure changes. The original survey was 2017–18; updates have been made since.
+
+**How we use it:** NOT as a live feed — as a **static reference layer** loaded at startup alongside the borough boundaries. Used to enrich the cycling impact classifier:
+- Roadwork on a road with a segregated cycleway → automatically "high" impact (the cycleway is probably affected)
+- Roadwork near a modal filter → flag for review (filter may be temporarily removed)
+- Roadwork on a road with no cycling infrastructure → lower default impact
+- Cross-reference with cycle route data (also from TfL) to flag works on Cycleways
+
+**Implementation:** Download the CID JSON files, load cycle lanes/tracks and restricted routes as a GeoDataFrame or Shapely geometry collection. For each incoming roadwork, check proximity to CID assets (buffer check, e.g. within 50m of a cycle lane). Add a "Affects Cycle Infrastructure" field to the Roadworks Notion database and use it to upgrade the cycling impact classification.
+
+### 2.7 Planning London Datahub — GLA (Phase 6)
+
+**What:** Real-time planning application data from all London boroughs, updated daily. Covers applications, permissions, commencements, and completions. Published by the GLA.
+
+**API type:** REST API with structured JSON responses.
+
+**Documentation:** https://www.london.gov.uk/programmes-strategies/planning/digital-planning/planning-london-datahub — includes API connection technical document and schema.
+
+**Registration:** Publicly accessible.
+
+**Why this matters for cycling:** Major developments generate:
+- Construction traffic (HGVs on cycling routes)
+- Temporary road closures and diversions (often for years on large sites)
+- S278 highway works (developer-funded changes to roads, which should include cycling improvements)
+- S106 obligations (which may include cycling infrastructure funding)
+- New trip generation that changes traffic patterns on local roads
+
+**Filtering strategy:** Query for applications in the target boroughs, filter to major applications (likely to have transport impact). Use Claude to assess cycling relevance from the application description.
+
+**Implementation:** A daily scheduled poll. Write to a new Development Activity Notion database. Lower priority than other phases because the data is less directly actionable — it's strategic intelligence rather than immediate operational awareness.
+
+**Note:** Lambeth is a pioneer in the Open Digital Planning programme, so data quality for Lambeth should be good. Southwark is also a partner.
+
 ---
 
 ## 3. Architecture
@@ -186,57 +295,77 @@ This list is configurable via environment variable.
                     └────────┬────────────┘
                              │ HTTPS POST (signed)
                              ▼
-┌──────────────────────────────────────────────┐
-│          Python Daemon (Railway)              │
-│  lambeth-cyclists-street-manager-production   │
-│  .up.railway.app                             │
-│                                              │
-│  ┌─────────────┐                             │
-│  │ FastAPI      │                             │
-│  │ webhook      │                             │
-│  │ receiver     │                             │
-│  │ + SNS sig    │                             │
-│  │   verify     │                             │
-│  └──────┬───────┘                             │
-│         │                                    │
-│         ▼                                    │
-│  ┌──────────────────────────────────────┐     │
-│  │        Geo-Filter Engine             │     │
-│  │  1. SWA code check (fast path)       │     │
-│  │  2. BNG→WGS84 + point-in-polygon    │     │
-│  │  Borough boundaries loaded at start  │     │
-│  └──────────────┬───────────────────────┘     │
-│                 │                              │
-│                 ▼                              │
-│  ┌──────────────────────────────────────┐     │
-│  │     Cycling Impact Classifier        │     │
-│  │  - Rule-based (all works)            │     │
-│  │  - Claude Haiku summary (high/med)   │     │
-│  └──────────────┬───────────────────────┘     │
-│                 │                              │
-│                 ▼                              │
-│  ┌──────────────────────────────────────┐     │
-│  │     Notion Writer                    │     │
-│  │  - Upsert to Roadworks DB            │     │
-│  │  - Dedup via permit_ref query        │     │
-│  │  - In-memory cache warmed at start   │     │
-│  └──────────────────────────────────────┘     │
-│                                              │
-└──────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│            Python Daemon (Railway)                    │
+│  lambeth-cyclists-street-manager-production           │
+│  .up.railway.app                                     │
+│                                                      │
+│  ┌─────────────┐  ┌───────────────────────────────┐  │
+│  │ FastAPI      │  │  Scheduled Jobs (Phase 2+)    │  │
+│  │ webhook      │  │  - TfL Disruptions (5 min)    │  │
+│  │ receiver     │  │  - STATS19 import (quarterly) │  │
+│  │ + SNS sig    │  │  - D-TRO poll (daily)         │  │
+│  │   verify     │  │  - Planning Datahub (daily)   │  │
+│  └──────┬───────┘  └──────────┬────────────────────┘  │
+│         │                     │                       │
+│         ▼                     ▼                       │
+│  ┌──────────────────────────────────────────────┐     │
+│  │        Geo-Filter Engine                     │     │
+│  │  1. SWA code check (fast path)               │     │
+│  │  2. BNG→WGS84 + point-in-polygon             │     │
+│  │  Borough boundaries loaded at start           │     │
+│  └──────────────┬───────────────────────────────┘     │
+│                 │                                      │
+│                 ▼                                      │
+│  ┌──────────────────────────────────────────────┐     │
+│  │     Cycling Impact Classifier                │     │
+│  │  - Rule-based (all works)                    │     │
+│  │  - Claude Haiku summary (high/med)           │     │
+│  │  - CID proximity check (Phase 5)             │     │
+│  └──────────────┬───────────────────────────────┘     │
+│                 │                                      │
+│                 ▼                                      │
+│  ┌──────────────────────────────────────────────┐     │
+│  │     Notion Writer                            │     │
+│  │  - Upsert to Roadworks DB                    │     │
+│  │  - Upsert to Disruptions DB (Phase 2)        │     │
+│  │  - Upsert to Collisions DB (Phase 3)         │     │
+│  │  - Upsert to Traffic Orders DB (Phase 4)     │     │
+│  │  - Upsert to Development DB (Phase 6)        │     │
+│  │  - Dedup via source-specific reference key    │     │
+│  │  - In-memory cache warmed at start            │     │
+│  └──────────────────────────────────────────────┘     │
+│                                                      │
+│  Reference Data (loaded at startup):                  │
+│  - Borough boundary polygons (ONS GeoJSON)            │
+│  - TfL CID cycle infrastructure (Phase 5)             │
+│                                                      │
+└──────────────────────────────────────────────────────┘
                              │
                              ▼
-                    ┌─────────────────────┐
-                    │   Notion Workspace  │
-                    │   (Lambeth Cyclists) │
-                    │                     │
-                    │  ┌───────────────┐  │
-                    │  │ Roadworks DB  │  │ ← DONE
-                    │  └───────────────┘  │
-                    │  ┌───────────────┐  │
-                    │  │ Traffic       │  │ ← Phase 2
-                    │  │ Orders DB     │  │
-                    │  └───────────────┘  │
-                    └─────────────────────┘
+                    ┌─────────────────────────┐
+                    │   Notion Workspace      │
+                    │   (Lambeth Cyclists)     │
+                    │                         │
+                    │  ┌───────────────────┐  │
+                    │  │ Roadworks DB      │  │ ← DONE
+                    │  └───────────────────┘  │
+                    │  ┌───────────────────┐  │
+                    │  │ Disruptions DB    │  │ ← Phase 2
+                    │  └───────────────────┘  │
+                    │  ┌───────────────────┐  │
+                    │  │ Cycling           │  │ ← Phase 3
+                    │  │ Collisions DB     │  │
+                    │  └───────────────────┘  │
+                    │  ┌───────────────────┐  │
+                    │  │ Traffic           │  │ ← Phase 4
+                    │  │ Orders DB         │  │
+                    │  └───────────────────┘  │
+                    │  ┌───────────────────┐  │
+                    │  │ Development       │  │ ← Phase 6
+                    │  │ Activity DB       │  │
+                    │  └───────────────────┘  │
+                    └─────────────────────────┘
 ```
 
 ### 3.2 Deployment
@@ -270,7 +399,16 @@ LOG_LEVEL=INFO
 # PORT=8080
 ```
 
-**Removed from original spec:** `BOROUGH_SWA_CODES` (hardcoded in config.py), `STREET_MANAGER_API_EMAIL`/`PASSWORD` (not needed for SNS), `DTRO_API_KEY` (Phase 2), `NOTION_TRAFFIC_ORDERS_DB_ID` (Phase 2).
+**Removed from original spec:** `BOROUGH_SWA_CODES` (hardcoded in config.py), `STREET_MANAGER_API_EMAIL`/`PASSWORD` (not needed for SNS).
+
+**Added in Phase 2:**
+- `TFL_API_KEY` — optional, works without key at lower rate limits
+- `NOTION_DISRUPTIONS_DB_ID` — required for TfL disruptions integration
+
+**Future env vars (added in later phases):**
+- Phase 3: `NOTION_COLLISIONS_DB_ID`
+- Phase 4: `DTRO_API_KEY`, `NOTION_TRAFFIC_ORDERS_DB_ID`
+- Phase 6: `NOTION_DEVELOPMENT_DB_ID`
 
 ---
 
@@ -370,7 +508,7 @@ Implemented in `src/classifier/claude.py`. Uses Claude Haiku (`claude-haiku-4-5-
 - **Road Closures** — filter: Traffic Management is "Road closure", Work Status is not "Completed"
 - **This Week** — filter: Proposed Start is within this week
 
-### 6.2 Traffic Orders Database (Phase 2 — D-TRO) — NOT STARTED
+### 6.2 Traffic Orders Database (Phase 4 — D-TRO) — NOT STARTED
 
 | Property | Type | Description |
 |----------|------|-------------|
@@ -387,6 +525,77 @@ Implemented in `src/classifier/claude.py`. Uses Claude Haiku (`claude-haiku-4-5-
 | Cycling Summary | Rich text | Claude-generated assessment |
 | Order Status | Select | Proposed / In force / Revoked |
 | Coordinates | Rich text | WGS84 lon,lat |
+| Last Updated | Date | When this record was last updated |
+
+### 6.3 TfL Disruptions Database (Phase 2) — DONE
+
+| Property | Type | Description |
+|----------|------|-------------|
+| Name | Title | Location + category (auto-generated) |
+| TfL Disruption ID | Rich text | Unique ID from TfL API |
+| Borough | Select | Which target borough |
+| Category | Select | Works / Collisions / Hazards / Network delays / Asset issues / Breakdowns / Planned events |
+| Sub-Category | Rich text | More specific cause description |
+| Status | Select | Active / Scheduled / Resolved |
+| Severity | Rich text | TfL severity level |
+| Location | Rich text | TfL text description |
+| Corridors | Rich text | Affected road corridors |
+| Start Time | Date | When the disruption starts/started |
+| End Time | Date | When the disruption is expected to end |
+| Description | Rich text | TfL comments/description (truncated if long) |
+| Cycling Impact | Select | High / Medium / Low / Minimal |
+| Cycling Summary | Rich text | Claude-generated summary (if applicable) |
+| Coordinates | Rich text | WGS84 lon,lat |
+| Last Updated | Date | When this record was last updated |
+
+### 6.4 Cycling Collisions Database (Phase 3) — NOT STARTED
+
+| Property | Type | Description |
+|----------|------|-------------|
+| Name | Title | Location + date (auto-generated, e.g. "Brixton Road / Stockwell Rd — 14 Mar 2024") |
+| Collision Reference | Rich text | STATS19 accident_index |
+| Borough | Select | Which target borough |
+| Date | Date | Date of collision |
+| Time | Rich text | Time of collision (HH:MM) |
+| Severity | Select | Fatal / Serious / Slight |
+| Number of Cyclists Hurt | Number | Count of pedal cycle casualties in this collision |
+| Worst Cyclist Severity | Select | Fatal / Serious / Slight |
+| Other Vehicles | Rich text | Types of other vehicles involved (e.g. "Car", "HGV", "Bus") |
+| Road Name | Rich text | First road / location description |
+| Speed Limit | Number | Speed limit at collision location (mph) |
+| Junction Detail | Rich text | Junction type if applicable |
+| Light Conditions | Select | Daylight / Darkness - lights lit / Darkness - no lights / Other |
+| Weather | Select | Fine / Rain / Snow / Fog / Other |
+| Road Surface | Select | Dry / Wet / Frost / Snow / Flood |
+| Coordinates | Rich text | WGS84 lon,lat |
+| Data Year | Rich text | Which STATS19 data release this came from |
+
+**Notion views for Collisions:**
+
+- **All Cyclist Collisions** — sort by Date descending
+- **Fatal & Serious Only** — filter: Severity is "Fatal" or "Serious"
+- **By Borough** — grouped by Borough
+- **By Road** — grouped/sorted by Road Name to identify dangerous roads
+- **Involving HGVs** — filter: Other Vehicles contains "HGV" or "Goods Vehicle"
+- **Heatmap export** — all collisions with coordinates, for export to mapping tools
+
+### 6.5 Development Activity Database (Phase 6) — NOT STARTED
+
+| Property | Type | Description |
+|----------|------|-------------|
+| Name | Title | Site address + application type (auto-generated) |
+| Application Reference | Rich text | Planning application reference |
+| Borough | Select | Which target borough |
+| Site Address | Rich text | Full site address |
+| Application Type | Rich text | e.g. "Full Planning Application", "Reserved Matters" |
+| Development Type | Rich text | e.g. "Major Residential", "Commercial", "Mixed Use" |
+| Description | Rich text | Proposal description (truncated) |
+| Status | Select | Submitted / Under Consideration / Approved / Refused / Withdrawn |
+| Decision Date | Date | If decided |
+| Cycling Impact | Select | Positive / Negative / Neutral / Needs Review |
+| Cycling Summary | Rich text | Claude-generated assessment of transport/cycling implications |
+| Coordinates | Rich text | WGS84 lon,lat |
+| PLD Link | URL | Link to the application in the Planning London Datahub |
 | Last Updated | Date | When this record was last updated |
 
 ---
@@ -434,16 +643,97 @@ All items complete. Awaiting Street Manager SNS subscription confirmation only.
    - Health check endpoint at `/health`
    - `railway.json` for healthcheck config
 
-### Phase 2: D-TRO Integration — NOT STARTED
+### Phase 2: TfL Live Disruptions — DONE
 
-1. Explore the D-TRO API at https://d-tro.dft.gov.uk
-2. Verify data availability for London boroughs before building
-3. Implement scheduled polling (daily) — will need `apscheduler` added at this point
-4. Geo-filter D-TRO records against borough boundaries
-5. Write to Traffic Orders Notion database
-6. Add Claude classification for cycling relevance of traffic orders
+All items complete. Polling live, writing to Notion.
 
-### Phase 3: Enhancements — NOT STARTED
+1. **TfL API access** — DONE. Works without API key at lower rate limits. Optional `TFL_API_KEY` env var supported.
+2. **TfL disruptions client** (`src/tfl/disruptions.py`) — DONE
+   - Fetches from `GET https://api.tfl.gov.uk/Road/all/Disruption`
+   - Extracts WGS84 coordinates from GeoJSON `geography` field (Point or LineString centroid)
+   - Classifies cycling impact based on real TfL categories: Collisions/Hazards→high, Moderate severity→medium, Minimal Works→low
+3. **Disruptions pipeline** (`src/tfl/pipeline.py`) — DONE
+   - Polls daily at 09:00 UK time (+ initial poll on startup)
+   - Geo-filters against borough polygons (reuses `GeoFilter.check_wgs84_point()`)
+   - Optional Claude Haiku summary for high/medium impact
+   - Upserts to Notion, marks disappeared disruptions as Resolved
+4. **Notion Disruptions database** — DONE. Schema from Section 6.3.
+5. **Notion writer extension** — DONE. Dedup on `TfL Disruption ID`, separate cache.
+6. **Env vars added:** `TFL_API_KEY` (optional), `NOTION_DISRUPTIONS_DB_ID`
+7. **Tests:** 17 new tests (classification, geo extraction, Notion property mapping)
+
+**New files:** `src/tfl/__init__.py`, `src/tfl/disruptions.py`, `src/tfl/pipeline.py`, `tests/test_tfl_disruptions.py`
+**Modified files:** `src/main.py` (asyncio poller task), `src/config.py` (new env vars), `src/geo/filter.py` (`check_wgs84_point()`), `src/notion/writer.py` (disruptions cache + upsert), `src/notion/schemas.py` (`disruption_to_notion_properties()`), `src/classifier/claude.py` (`get_disruption_cycling_summary()`)
+
+### Phase 3: STATS19 Cycling Collision Data — NOT STARTED
+
+**Priority: HIGH.** The most powerful dataset for cycling advocacy. Implementation is straightforward (CSV download + filter + Notion write), but it's a batch job rather than real-time.
+
+1. **Collision data importer** (`src/stats19/importer.py`)
+   - Download collision, casualty, and vehicle CSVs from https://www.gov.uk/government/statistical-data-sets/road-safety-open-data
+   - Parse CSVs with pandas
+   - Filter collisions to those within target borough polygons (coordinates are WGS84 `longitude`/`latitude` columns)
+   - Join to casualties table, filter to rows where `casualty_type` indicates pedal cyclist
+   - Join to vehicles table to identify other vehicle types involved
+2. **Create Notion Cycling Collisions database** with schema from Section 6.4
+3. **Notion writer extension** — bulk write collision records, dedup on `accident_index`
+4. **Backfill script** (`scripts/backfill_collisions.py`) — one-off import of historical data (suggest last 5 years: 2020–2024)
+5. **Scheduled job** — check quarterly for new STATS19 data releases (or run manually when new data drops in September/November)
+6. **Add env var:** `NOTION_COLLISIONS_DB_ID`
+
+**New files:** `src/stats19/__init__.py`, `src/stats19/importer.py`, `scripts/backfill_collisions.py`
+**New dependency:** `pandas`
+
+**Implementation note:** The STATS19 CSVs use coded integer values (not text labels). The DfT provides a lookup guide (Excel) to decode them. The importer should map codes to human-readable labels before writing to Notion.
+
+### Phase 4: D-TRO Integration — NOT STARTED
+
+**Priority: MEDIUM.** Valuable data (traffic regulation orders), but coverage for London boroughs may still be patchy. Check data availability before building.
+
+1. **Explore the D-TRO API** at https://d-tro.dft.gov.uk — register, query for London boroughs, assess data volume and quality
+2. **Verify Lambeth is publishing.** Lambeth has implemented digital traffic orders through AppyWay's Traffic Suite, so may be among the first boroughs on D-TRO. If no London data exists yet, defer further.
+3. **D-TRO client** (`src/dtro/client.py`) — daily poll of the D-TRO API
+4. **Geo-filter** D-TRO records against borough boundaries (D-TROs include geographic extents)
+5. **Create Notion Traffic Orders database** with schema from Section 6.2
+6. **Claude classification** — assess cycling relevance (new cycle lane order = positive, parking removal = potentially positive, speed limit increase = negative, etc.)
+7. **Add env vars:** `DTRO_API_KEY`, `NOTION_TRAFFIC_ORDERS_DB_ID`
+
+**New files:** `src/dtro/__init__.py`, `src/dtro/client.py`
+
+### Phase 5: TfL Cycling Infrastructure Database (CID) — NOT STARTED
+
+**Priority: MEDIUM.** Doesn't add a new Notion database — instead it makes the existing cycling impact classifier significantly smarter by understanding which roads have cycling infrastructure.
+
+1. **Download CID data** from https://cycling.data.tfl.gov.uk/ — cycle lanes/tracks JSON, restricted routes JSON
+2. **Load as reference layer** (`src/geo/cycling_infrastructure.py`) — parse CID geometries into Shapely LineStrings/Points, index spatially (R-tree via `rtree` or Shapely STRtree)
+3. **Proximity check function** — given a coordinate, find the nearest CID asset within a configurable radius (e.g. 50m). Return the asset type (segregated cycleway, painted lane, modal filter, etc.)
+4. **Upgrade classifier** — modify `src/classifier/rules.py` to:
+   - Check CID proximity for every roadwork
+   - If roadwork is within 50m of a segregated cycleway → automatically "high" impact
+   - If roadwork is within 50m of a modal filter → flag "medium" (filter may be temporarily removed)
+   - If roadwork is on a road with no nearby cycling infra → lower default impact
+5. **Add field to Roadworks DB:** "Affects Cycle Infrastructure" (rich text — name of nearest asset, e.g. "Cycleway 7 — segregated track")
+6. **Cross-reference cycle routes** — TfL also publishes cycle route data (JSON/KML) showing Cycleways and other routes. Load this alongside CID to flag "Roadwork on Cycleway 5" etc.
+
+**New files:** `src/geo/cycling_infrastructure.py`
+**Modified files:** `src/classifier/rules.py`, `src/notion/schemas.py`
+**New dependency:** possibly `rtree` for spatial indexing (or use Shapely's built-in STRtree)
+**New data files:** `data/cid_cycle_lanes.json`, `data/cid_restricted_routes.json`, `data/cycle_routes.json`
+
+### Phase 6: Planning London Datahub — NOT STARTED
+
+**Priority: LOWER.** Strategic intelligence rather than immediate operational awareness. Useful for identifying developments that will generate construction traffic or trigger highway changes, but less directly actionable than the other data sources.
+
+1. **Explore the PLD API** — review technical documentation at https://www.london.gov.uk/programmes-strategies/planning/digital-planning/planning-london-datahub
+2. **PLD client** (`src/planning/client.py`) — daily poll for new/updated applications in target boroughs
+3. **Filter to major applications** — those likely to have transport implications (major residential, commercial, infrastructure)
+4. **Claude classification** — assess cycling relevance from application description (construction traffic impact, S278 highway works, cycle parking provision, new connections)
+5. **Create Notion Development Activity database** with schema from Section 6.5
+6. **Add env vars:** `NOTION_DEVELOPMENT_DB_ID`
+
+**New files:** `src/planning/__init__.py`, `src/planning/client.py`
+
+### Phase 7: Enhancements — NOT STARTED
 
 - **USRN enrichment:** Build a lookup of key cycling routes by USRN, flag works on these routes as automatically high-priority
 - **Historical analysis:** Aggregate data over time to identify most-disrupted roads per borough (à la Chris Carlon's analysis)
@@ -489,8 +779,15 @@ Street Manager uses British National Grid (EPSG:27700) throughout. Borough bound
 | Notion Integration | DONE | Integration created, Roadworks database shared with it |
 | Notion Roadworks Database | DONE | Created with schema from Section 6.1 |
 | Anthropic API Key | DONE | Configured in Railway env vars |
-| D-TRO Service registration | NOT STARTED | Phase 2 |
-| Notion Traffic Orders Database | NOT STARTED | Phase 2 |
+| TfL API Key registration | DONE (not needed) | Works without key at lower rate limits. Optional `TFL_API_KEY` env var supported |
+| Notion Disruptions Database | DONE | Created with schema from Section 6.3. DB ID configured in Railway env vars |
+| STATS19 data download | NOT STARTED | Phase 3 — download from https://www.gov.uk/government/statistical-data-sets/road-safety-open-data |
+| Notion Cycling Collisions Database | NOT STARTED | Phase 3 |
+| D-TRO Service registration | NOT STARTED | Phase 4 — register at https://d-tro.dft.gov.uk |
+| Notion Traffic Orders Database | NOT STARTED | Phase 4 |
+| TfL CID data download | NOT STARTED | Phase 5 — download from https://cycling.data.tfl.gov.uk/ |
+| Planning London Datahub exploration | NOT STARTED | Phase 6 |
+| Notion Development Activity Database | NOT STARTED | Phase 6 |
 
 ---
 
@@ -551,6 +848,10 @@ lambeth-cyclists-street-manager/
 │   │   ├── __init__.py
 │   │   ├── webhook.py                     # SNS webhook handler
 │   │   └── sns_verify.py                  # SNS message signature verification
+│   ├── tfl/
+│   │   ├── __init__.py
+│   │   ├── disruptions.py                 # TfL API client, geo extraction, classifier
+│   │   └── pipeline.py                    # Fetch → filter → classify → Notion
 │   ├── classifier/
 │   │   ├── __init__.py
 │   │   ├── rules.py                       # Rule-based cycling impact classification
@@ -566,6 +867,7 @@ lambeth-cyclists-street-manager/
 │   ├── test_webhook.py                    # SNS webhook + signature tests
 │   ├── test_notion_schemas.py             # Property mapping tests
 │   ├── test_integration.py                # Real boundary data tests
+│   ├── test_tfl_disruptions.py            # TfL classifier, geo, schema tests
 │   └── fixtures/
 │       ├── sample_permit_notification.json
 │       └── sample_tfl_notification.json
@@ -576,13 +878,14 @@ lambeth-cyclists-street-manager/
 
 ## 13. Testing Strategy
 
-33 tests passing. Coverage:
+50 tests passing. Coverage:
 
 - **Geo-filtering (11 tests):** BNG→WGS84 conversion with known coordinates, SWA code fast path, point-in-polygon with real borough boundaries (Brixton Road→Lambeth, Borough High Street→Southwark, Streatham→Lambeth, Croydon town centre→Croydon), rejection of coordinates outside target area (Canary Wharf, Islington).
 - **Classification (8 tests):** All traffic management types, emergency works, footway vs carriageway, unknown types.
 - **Webhook (7 tests):** Health endpoint, valid notifications, irrelevant events, malformed body, unsigned message rejection, unknown SNS types, subscription confirmation signature bypass.
 - **Notion schemas (3 tests):** Basic property mapping, missing fields, optional fields omitted.
 - **Integration (4 tests):** Real boundary data loading, real coordinate matching.
+- **TfL disruptions (17 tests):** Impact classification for all real TfL categories (Collisions, Hazards, Works, Breakdowns, Planned events, Network delays), severity handling, GeoJSON point/linestring extraction, null geography handling, Notion property mapping with full/missing/summary fields.
 
 ---
 
@@ -594,14 +897,45 @@ lambeth-cyclists-street-manager/
 
 ## Appendix A: Useful Links
 
+**Street Manager (Phase 1 — DONE):**
 - Street Manager docs: https://department-for-transport-streetmanager.github.io/street-manager-docs/
 - Street Manager open data: https://department-for-transport-streetmanager.github.io/street-manager-docs/open-data/
 - Street Manager API notifications: https://department-for-transport-streetmanager.github.io/street-manager-docs/api-notifications/
 - Street Manager helpdesk: https://streetmanager.atlassian.net/servicedesk/customer/portals
 - Street Manager Python client: https://github.com/cogna-public/streetmanager
+
+**TfL Live Disruptions (Phase 2):**
+- TfL Unified API Swagger: https://api.tfl.gov.uk/swagger/ui/index.html
+- TfL API portal (registration): https://api-portal.tfl.gov.uk/
+- TfL open data overview: https://tfl.gov.uk/info-for/open-data-users/our-open-data
+- TfL Live Traffic Disruptions (London Datastore): https://data.london.gov.uk/dataset/tfl-live-traffic-disruptions-248xn/
+
+**STATS19 Road Collision Data (Phase 3):**
+- STATS19 open data downloads: https://www.gov.uk/government/statistical-data-sets/road-safety-open-data
+- STATS19 data guide (Excel, decode values): available at the link above
+- DfT pedal cycle factsheet 2024: https://www.gov.uk/government/statistics/reported-road-casualties-great-britain-pedal-cyclist-factsheet-2024
+- TfL road safety data page: https://tfl.gov.uk/corporate/publications-and-reports/road-safety
+- `stats19` R package (reference for data structure): https://itsleeds.github.io/stats19/
+
+**D-TRO (Phase 4):**
 - D-TRO GitHub: https://github.com/department-for-transport-public/D-TRO
 - D-TRO service: https://d-tro.dft.gov.uk
+- Lambeth digital traffic orders (AppyWay case study): https://appyway.com/portfolio/unlocking-sustainability-lambeth-council-implements-d-tros-and-uses-traffic-suite-to-manage-and-monitor-their-sustainable-kerbside-vision/
+
+**TfL Cycling Infrastructure Database (Phase 5):**
+- CID data downloads: https://cycling.data.tfl.gov.uk/ (under CycleInfrastructure/)
+- CID on London Datastore: https://data.london.gov.uk/dataset/cycling-infrastructure-database-23n1k/
+- CID OSM wiki: https://wiki.openstreetmap.org/wiki/TfL_Cycling_Infrastructure_Database
+
+**Planning London Datahub (Phase 6):**
+- PLD main page: https://www.london.gov.uk/programmes-strategies/planning/digital-planning/planning-london-datahub
+- PLD API technical docs: https://www.london.gov.uk/sites/default/files/planninglondondatahub_api_connection_technical_documentation_v1.pdf
+- Lambeth Open Digital Planning: https://www.lambeth.gov.uk/better-fairer-lambeth/projects/open-digital-planning
+
+**General / Inspiration:**
 - ONS Open Geography Portal: https://geoportal.statistics.gov.uk/
 - London Datastore boundaries: https://data.london.gov.uk/dataset/statistical-gis-boundary-files-london
 - Chris Carlon's Street Works analysis (inspiration): https://www.ccarlon.dev/blog/street_works/
 - Transport select committee report on street works: https://publications.parliament.uk/pa/cm5901/cmselect/cmtrans/522/report.html
+- Lambeth statutory consultations: https://www.lambeth.gov.uk/streets-roads-and-transport/traffic-and-road-closures/road-humps-stopping-orders-and/statutory-consultations
+- Southwark Cyclists consultations page: https://southwarkcyclists.org.uk/current-consultations/
