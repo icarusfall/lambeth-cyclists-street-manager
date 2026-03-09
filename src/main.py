@@ -1,13 +1,10 @@
 """FastAPI application — receives Street Manager SNS notifications and writes to Notion."""
 
-import asyncio
 import logging
-import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-import httpx
 from fastapi import FastAPI
 
 from src.config import settings
@@ -75,45 +72,9 @@ async def lifespan(app: FastAPI):
 
     _app_state["started_at"] = datetime.now(timezone.utc).isoformat()
 
-    # Start keep-alive self-ping to prevent Railway from sleeping the container.
-    # Railway sleeps inactive containers, which would cause us to miss SNS notifications.
-    ping_task = asyncio.create_task(_keep_alive())
-
     yield
 
-    ping_task.cancel()
     logger.info("Shutting down")
-
-
-async def _keep_alive():
-    """Ping our own health endpoint every 5 minutes to prevent Railway sleep.
-
-    Uses the public URL so Railway counts it as external traffic.
-    Falls back to localhost if RAILWAY_PUBLIC_DOMAIN is not set.
-    """
-    public_domain = os.environ.get(
-        "RAILWAY_PUBLIC_DOMAIN",
-        "lambeth-cyclists-street-manager-production.up.railway.app",
-    )
-    url = f"https://{public_domain}/health"
-
-    logger.info("Keep-alive will ping: %s", url)
-
-    async with httpx.AsyncClient() as client:
-        # Initial ping immediately to establish external traffic
-        try:
-            resp = await client.get(url, timeout=10)
-            logger.info("Initial keep-alive ping: %s", resp.status_code)
-        except Exception:
-            pass
-
-        while True:
-            await asyncio.sleep(120)  # 2 minutes
-            try:
-                resp = await client.get(url, timeout=10)
-                logger.debug("Keep-alive ping: %s", resp.status_code)
-            except Exception:
-                pass  # Non-critical — just a keep-alive
 
 
 app = FastAPI(
