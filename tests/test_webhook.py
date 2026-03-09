@@ -1,7 +1,8 @@
 """Tests for the SNS webhook handler."""
 
+import asyncio
 import json
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -88,5 +89,21 @@ class TestSnsWebhook:
         """Unknown message types with valid signatures should be accepted."""
         sns_message = {"Type": "SomethingNew"}
         with _patch_signature_verification():
+            resp = client.post("/webhook/street-manager", json=sns_message)
+        assert resp.status_code == 200
+
+    def test_subscription_confirmation_bypasses_signature_check(self, client):
+        """SubscriptionConfirmation should proceed even without valid signature."""
+        sns_message = {
+            "Type": "SubscriptionConfirmation",
+            "SubscribeURL": "https://example.com/confirm",
+            "TopicArn": "arn:aws:sns:eu-west-2:287813576808:prod-permit-topic",
+        }
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        with patch("src.street_manager.webhook.httpx.AsyncClient") as mock_client:
+            mock_client.return_value.__aenter__ = AsyncMock(return_value=mock_client.return_value)
+            mock_client.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.return_value.get = AsyncMock(return_value=mock_response)
             resp = client.post("/webhook/street-manager", json=sns_message)
         assert resp.status_code == 200
