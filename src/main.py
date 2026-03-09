@@ -100,8 +100,15 @@ async def _keep_alive():
     logger.info("Keep-alive will ping: %s", url)
 
     async with httpx.AsyncClient() as client:
+        # Initial ping immediately to establish external traffic
+        try:
+            resp = await client.get(url, timeout=10)
+            logger.info("Initial keep-alive ping: %s", resp.status_code)
+        except Exception:
+            pass
+
         while True:
-            await asyncio.sleep(300)  # 5 minutes
+            await asyncio.sleep(120)  # 2 minutes
             try:
                 resp = await client.get(url, timeout=10)
                 logger.debug("Keep-alive ping: %s", resp.status_code)
