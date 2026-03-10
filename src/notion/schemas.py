@@ -87,21 +87,38 @@ def work_to_notion_properties(
         Dict of Notion property values ready for the API.
     """
     street = object_data.get("street_name", "Unknown street")
-    area = object_data.get("area_name", "")
+    area = object_data.get("area_name", "") or object_data.get("town", "")
     title = f"{street}, {area}" if area else street
 
-    tm_ref = object_data.get("traffic_management_type_ref", "")
+    # Permits use _ref fields; activities use raw values directly
+    tm_ref = (
+        object_data.get("traffic_management_type_ref")
+        or object_data.get("traffic_management_type", "")
+    )
     cat_ref = object_data.get("work_category_ref", "")
     status_ref = object_data.get("work_status_ref", "")
 
+    # Reference numbers — activities use activity_reference_number
+    permit_ref = (
+        object_data.get("permit_reference_number")
+        or object_data.get("activity_reference_number", "")
+    )
+    work_ref = object_data.get("work_reference_number", "")
+
+    # Dates — activities use start_date/end_date
+    start_date = (
+        object_data.get("proposed_start_date")
+        or object_data.get("start_date")
+    )
+    end_date = (
+        object_data.get("proposed_end_date")
+        or object_data.get("end_date")
+    )
+
     props = {
         "Name": _title(title),
-        "Permit Reference": _rich_text(
-            object_data.get("permit_reference_number", "")
-        ),
-        "Work Reference": _rich_text(
-            object_data.get("work_reference_number", "")
-        ),
+        "Permit Reference": _rich_text(permit_ref),
+        "Work Reference": _rich_text(work_ref),
         "Borough": _select(borough),
         "Highway Authority": _rich_text(
             object_data.get("highway_authority", "")
@@ -121,15 +138,16 @@ def work_to_notion_properties(
         "Work Status": _select(
             _WORK_STATUS_LABELS.get(status_ref, status_ref or "Unknown")
         ),
-        "Proposed Start": _date(object_data.get("proposed_start_date")),
-        "Proposed End": _date(object_data.get("proposed_end_date")),
+        "Proposed Start": _date(start_date),
+        "Proposed End": _date(end_date),
         "Actual Start": _date(object_data.get("actual_start_date_time")),
         "Cycling Impact": _select(cycling_impact.capitalize()),
         "Activity Type": _rich_text(
             object_data.get("activity_type", "")
         ),
         "TTRO Required": _checkbox(
-            object_data.get("is_ttro_required", "No")
+            object_data.get("is_ttro_required")
+            or object_data.get("traffic_management_required", "No")
         ),
         "Last Updated": _date(datetime.utcnow().isoformat()),
         "Source Event": _rich_text(event_type),

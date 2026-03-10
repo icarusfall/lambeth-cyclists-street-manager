@@ -11,6 +11,46 @@ from src.notion.writer import NotionWriter
 logger = logging.getLogger(__name__)
 
 
+def _normalise_activity_data(notification: dict) -> None:
+    """Normalise activity event fields to permit-equivalent names.
+
+    Activity events (from the prod-activity-topic) use different field names
+    than permit events. This maps them so downstream code works for both.
+    Modifies object_data in-place.
+    """
+    event_type = notification.get("event_type", "")
+    if not event_type.startswith("ACTIVITY_"):
+        return
+
+    od = notification.get("object_data", {})
+
+    # Reference number
+    if "activity_reference_number" in od and "permit_reference_number" not in od:
+        od["permit_reference_number"] = od["activity_reference_number"]
+
+    # Coordinates (can be POINT or LINESTRING)
+    if "activity_coordinates" in od and "works_location_coordinates" not in od:
+        od["works_location_coordinates"] = od["activity_coordinates"]
+
+    # Dates
+    if "start_date" in od and "proposed_start_date" not in od:
+        od["proposed_start_date"] = od["start_date"]
+    if "end_date" in od and "proposed_end_date" not in od:
+        od["proposed_end_date"] = od["end_date"]
+
+    # Location type
+    if "activity_location_type" in od and "works_location_type" not in od:
+        od["works_location_type"] = od["activity_location_type"]
+
+    # Traffic management — activities have the raw value directly
+    if "traffic_management_type" in od and "traffic_management_type_ref" not in od:
+        od["traffic_management_type_ref"] = od["traffic_management_type"]
+
+    # Cancelled status → work_status_ref
+    if od.get("cancelled") == "Yes" and "work_status_ref" not in od:
+        od["work_status_ref"] = "cancelled"
+
+
 class Pipeline:
     """Processes Street Manager notifications through the full pipeline."""
 
@@ -22,6 +62,7 @@ class Pipeline:
         """Process a single Street Manager SNS notification.
 
         Steps:
+        0. Normalise activity fields to permit equivalents
         1. Geo-filter: is this work in one of our target boroughs?
         2. Classify cycling impact (rule-based)
         3. Optionally get Claude summary for high/medium impact
@@ -34,15 +75,16 @@ class Pipeline:
             logger.warning("Notification has no object_data, skipping")
             return
 
+        # Step 0: Normalise activity fields
+        _normalise_activity_data(notification)
+
         # Step 1: Geo-filter
         include, borough = self._geo_filter.check(object_data)
         if not include:
-            logger.debug("Filtered out: not in target boroughs")
             return
 
         permit_ref = object_data.get("permit_reference_number", "")
         if not permit_ref:
-            # Activities and Section 58s may not have permit references
             permit_ref = notification.get("object_reference", "")
         if not permit_ref:
             logger.warning("No permit/object reference found, skipping")

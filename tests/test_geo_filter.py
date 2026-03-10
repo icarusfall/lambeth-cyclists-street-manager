@@ -27,7 +27,23 @@ class TestBngToWgs84:
     def test_invalid_wkt_returns_none(self):
         assert parse_bng_wkt_to_wgs84("INVALID") is None
         assert parse_bng_wkt_to_wgs84("") is None
-        assert parse_bng_wkt_to_wgs84("LINESTRING(0 0, 1 1)") is None
+        assert parse_bng_wkt_to_wgs84("POLYGON((0 0, 1 1, 2 2, 0 0))") is None
+
+    def test_linestring_returns_midpoint(self):
+        """LINESTRING should return the midpoint of the coordinate list."""
+        # Two BNG points roughly in Westminster
+        point = parse_bng_wkt_to_wgs84(
+            "LINESTRING(530000.00 180000.00,531000.00 180500.00)"
+        )
+        assert point is not None
+        assert -0.15 < point.x < -0.10
+        assert 51.49 < point.y < 51.52
+
+    def test_activity_linestring_with_multiple_coords(self):
+        """Real activity LINESTRING with multiple coordinate pairs."""
+        wkt = "LINESTRING(531100.00 176100.00,531200.00 176200.00,531300.00 176300.00)"
+        point = parse_bng_wkt_to_wgs84(wkt)
+        assert point is not None
 
 
 class TestGeoFilter:
@@ -85,3 +101,21 @@ class TestGeoFilter:
             "highway_authority_swa_code": "1234",  # Not a target borough
         })
         assert include is False
+
+    def test_activity_coordinates_fallback(self, geo_filter):
+        """Activities using activity_coordinates should be geo-filtered."""
+        include, borough = geo_filter.check({
+            "highway_authority_swa_code": "0999",  # TfL
+            "activity_coordinates": "POINT(531100.00 176100.00)",  # Brixton Road
+        })
+        assert include is True
+        assert borough == "Lambeth"
+
+    def test_activity_linestring_in_lambeth(self, geo_filter):
+        """Activity LINESTRING coordinates in Lambeth should match."""
+        include, borough = geo_filter.check({
+            "highway_authority_swa_code": "0999",
+            "activity_coordinates": "LINESTRING(531100.00 176100.00,531200.00 176200.00)",
+        })
+        assert include is True
+        assert borough == "Lambeth"

@@ -106,13 +106,6 @@ async def sns_webhook(request: Request) -> Response:
     # SNS sends messages with content-type text/plain, body is JSON
     raw_body = await request.body()
 
-    # Log every incoming request so we can reconstruct it if processing fails
-    logger.info(
-        "Incoming POST — headers: %s",
-        dict(request.headers),
-    )
-    logger.info("Incoming POST — body: %s", raw_body.decode("utf-8", errors="replace"))
-
     try:
         body = json.loads(raw_body)
     except json.JSONDecodeError:
@@ -132,7 +125,7 @@ async def sns_webhook(request: Request) -> Response:
                 "proceeding anyway (SubscribeURL is self-validating)"
             )
         else:
-            logger.warning("Rejected message with invalid SNS signature — body logged above")
+            logger.warning("Rejected message with invalid SNS signature")
             return Response(status_code=403)
 
     if message_type == "SubscriptionConfirmation":

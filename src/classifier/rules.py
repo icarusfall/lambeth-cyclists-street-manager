@@ -23,9 +23,10 @@ def quick_cycling_impact(object_data: dict) -> str:
 
     Returns one of: "high", "medium", "low", "minimal".
     """
-    tm = object_data.get("traffic_management_type_ref", "")
+    # Permits use _ref fields; activities use the raw value directly
+    tm = object_data.get("traffic_management_type_ref") or object_data.get("traffic_management_type", "")
     cat = object_data.get("work_category_ref", "")
-    loc = object_data.get("works_location_type", "")
+    loc = object_data.get("works_location_type") or object_data.get("activity_location_type", "")
 
     # Footway-only works with low traffic management rarely affect cycling
     if loc == "Footway" and tm in LOW_IMPACT_TRAFFIC_MGMT:

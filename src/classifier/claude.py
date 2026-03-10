@@ -39,11 +39,26 @@ async def get_cycling_summary(object_data: dict, borough: str) -> str | None:
         area_name=object_data.get("area_name", ""),
         borough=borough,
         activity_type=object_data.get("activity_type", "Unknown"),
-        traffic_management_type=object_data.get("traffic_management_type", "Unknown"),
-        proposed_start_date=object_data.get("proposed_start_date", "Unknown"),
-        proposed_end_date=object_data.get("proposed_end_date", "Unknown"),
-        work_category=object_data.get("work_category", "Unknown"),
-        promoter_organisation=object_data.get("promoter_organisation", "Unknown"),
+        traffic_management_type=(
+            object_data.get("traffic_management_type")
+            or object_data.get("traffic_management_type_ref", "Unknown")
+        ),
+        proposed_start_date=(
+            object_data.get("proposed_start_date")
+            or object_data.get("start_date", "Unknown")
+        ),
+        proposed_end_date=(
+            object_data.get("proposed_end_date")
+            or object_data.get("end_date", "Unknown")
+        ),
+        work_category=(
+            object_data.get("work_category")
+            or object_data.get("activity_type_details", "Unknown")
+        ),
+        promoter_organisation=(
+            object_data.get("promoter_organisation")
+            or object_data.get("highway_authority", "Unknown")
+        ),
     )
 
     try:
