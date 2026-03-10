@@ -5,21 +5,22 @@ from pydantic_settings import BaseSettings
 
 # SWA codes for target boroughs — used for fast-path geo-filtering.
 # These identify the highway authority responsible for a road.
-# Verify against Street Manager before going live.
+# Source: GeoPlace SWA_ORG_ACTIVE registry (verified March 2026).
 BOROUGH_SWA_CODES: dict[str, str] = {
-    "5540": "Lambeth",
-    "5630": "Southwark",
-    "5690": "Wandsworth",
-    "5420": "Lewisham",
-    "5510": "Merton",
-    "5210": "Croydon",
-    "5110": "City of London",
+    "5660": "Lambeth",
+    "5840": "Southwark",
+    "5960": "Wandsworth",
+    "5690": "Lewisham",
+    "5720": "Merton",
+    "5240": "Croydon",
+    "5030": "City of London",
     "5990": "Westminster",
 }
 
 # TfL manages red routes (TLRN) passing through our boroughs.
 # Works on these roads won't match by SWA code — they need geo-filtering.
-TFL_SWA_CODE = "0999"
+# GeoPlace lists TfL as code 20; Street Manager may send "20" or "0020".
+TFL_SWA_CODE = "20"
 
 _DEFAULT_BOROUGHS = [
     "Lambeth", "Southwark", "Wandsworth", "Lewisham",

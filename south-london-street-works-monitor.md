@@ -24,7 +24,7 @@
 | 1 | Cycling impact classifier (rule-based) | DONE |
 | 1 | Claude API enrichment (optional, for high/medium) | DONE |
 | 1 | Deployment to Railway | DONE |
-| 1 | Street Manager open data registration | SUBMITTED — awaiting confirmation (up to 1 working day) |
+| 1 | Street Manager open data registration | PARTIAL — activity + section-58 confirmed; permit topic needs re-registration |
 | 1 | Notion Roadworks database created & connected | DONE |
 | 1 | Tests (50 passing) | DONE |
 | 2 | TfL Live Disruptions API integration | DONE |
@@ -53,7 +53,7 @@
 
 6. **SNS signature verification added.** The original spec noted this was missing. Now implemented using the `cryptography` package to validate SNS message signatures against AWS signing certificates.
 
-7. **SWA codes corrected.** The env var example in the original spec (`5660,5630,...`) didn't match the table in Section 10. The implemented codes match the Section 10 table. These still need verification against the live Street Manager API once notifications start flowing.
+7. **SWA codes corrected.** The original spec's Section 10 SWA codes were wrong (e.g. 5210=Camden not Croydon, 5540=Hounslow not Lambeth). All codes verified against the official GeoPlace SWA_ORG_ACTIVE registry in March 2026 and corrected in `src/config.py`. See Section 10 for the corrected table.
 
 8. **Borough boundaries sourced from ONS, not London Datastore.** The London Datastore provides shapefiles, not GeoJSON. Used the ONS Open Geography Portal ArcGIS API instead (`Local_Authority_Districts_December_2024_Boundaries_UK_BFE`), which provides GeoJSON directly. Property key for borough names is `LAD24NM`.
 
@@ -64,6 +64,10 @@
 11. **TfL polling daily at 09:00, not every 5 minutes.** The original spec called for 5-minute polling. Changed to daily at 09:00 UK time (with an initial poll on startup) since disruption data doesn't change fast enough to justify 288 API calls per day. Uses `asyncio.sleep` to wait until the next 09:00 — no `apscheduler` dependency needed.
 
 12. **No `apscheduler` dependency.** The TfL poller uses a simple `asyncio` task with sleep-until-target-time logic instead of adding a scheduler dependency. This keeps the dependency footprint small and avoids configuration complexity.
+
+13. **Activity events have a different payload shape than permits.** The `prod-activity-topic` sends events with different field names (e.g. `activity_reference_number` not `permit_reference_number`, `activity_coordinates` not `works_location_coordinates`, `start_date`/`end_date` not `proposed_start_date`/`proposed_end_date`). A normalisation layer in `src/pipeline.py` (`_normalise_activity_data()`) maps activity fields to permit equivalents before the rest of the pipeline runs. Activity coordinates can be LINESTRING (not just POINT); the geo-filter extracts the midpoint for polygon containment checks.
+
+14. **SNS subscription status.** Only `prod-activity-topic` and `prod-section-58-topic` were successfully subscribed on 10 March 2026. The `prod-permit-topic` subscription failed due to a malformed endpoint URL (path got doubled). Ticket raised with Street Manager helpdesk (SPBS) to re-register. Permit events are the main data source — until re-subscribed, only activity and Section 58 events are received.
 
 ---
 
@@ -99,7 +103,7 @@ This list is configurable via environment variable.
 
 **Registration:** Free open data account at https://www.manage-roadworks.service.gov.uk/open-data-onboarding
 
-**Status:** Registration submitted 8 March 2026. Awaiting confirmation (up to 1 working day). The endpoint registered is `https://lambeth-cyclists-street-manager-production.up.railway.app/webhook/street-manager`.
+**Status:** Registration submitted 8 March 2026. Two of three topics confirmed (activity + section-58). The permit topic subscription failed due to a malformed endpoint URL and needs re-registration (ticket raised with Street Manager helpdesk). The endpoint is `https://lambeth-cyclists-street-manager-production.up.railway.app/webhook/street-manager`.
 
 **Support helpdesk:** https://streetmanager.atlassian.net/servicedesk/customer/portals
 
@@ -429,7 +433,11 @@ class GeoFilter:
             return True, self._swa_to_borough[ha_swa]
 
         # Geo path: for TfL roads, cross-boundary utility works, etc.
-        coords_wkt = object_data.get("works_location_coordinates")
+        # Activities use activity_coordinates; permits use works_location_coordinates
+        coords_wkt = (
+            object_data.get("works_location_coordinates")
+            or object_data.get("activity_coordinates")
+        )
         if not coords_wkt:
             return False, ""
 
@@ -446,7 +454,7 @@ class GeoFilter:
 
 ### 4.2 Coordinate Conversion
 
-Implemented in `src/geo/filter.py`. Tested with real coordinates — Brixton Road correctly resolves to Lambeth, Borough High Street to Southwark, etc.
+Implemented in `src/geo/filter.py`. Supports both POINT and LINESTRING WKT geometries (LINESTRING uses midpoint for containment check). Tested with real coordinates — Brixton Road correctly resolves to Lambeth, Borough High Street to Southwark, etc.
 
 ### 4.3 Borough Boundary Loading
 
@@ -604,7 +612,7 @@ Implemented in `src/classifier/claude.py`. Uses Claude Haiku (`claude-haiku-4-5-
 
 ### Phase 1: Street Manager Integration (MVP) — DONE
 
-All items complete. Awaiting Street Manager SNS subscription confirmation only.
+All items complete. Activity and Section 58 subscriptions confirmed. Permit topic subscription needs re-registration (ticket raised).
 
 1. **Project setup** — DONE
    - Python project with `pyproject.toml` and Dockerfile
@@ -793,21 +801,23 @@ Street Manager uses British National Grid (EPSG:27700) throughout. Borough bound
 
 ## 10. SWA Code Reference
 
-Borough SWA codes for fast-path filtering (**still need verification against live Street Manager data**):
+Borough SWA codes for fast-path filtering. Verified against the official GeoPlace SWA_ORG_ACTIVE registry (March 2026):
 
 | Borough | SWA Code |
 |---------|----------|
-| Lambeth | 5540 |
-| Southwark | 5630 |
-| Wandsworth | 5690 |
-| Lewisham | 5420 |
-| Merton | 5510 |
-| Croydon | 5210 |
-| City of London | 5110 |
+| Lambeth | 5660 |
+| Southwark | 5840 |
+| Wandsworth | 5960 |
+| Lewisham | 5690 |
+| Merton | 5720 |
+| Croydon | 5240 |
+| City of London | 5030 |
 | Westminster | 5990 |
-| Transport for London | 0999 |
+| Transport for London | 20 |
 
-These are hardcoded in `src/config.py`. Once live notifications arrive, we can verify them against actual data and update if needed. The geo-filter (point-in-polygon) catches any works that slip through due to incorrect SWA codes, so incorrect codes only affect performance (extra geo-lookups), not correctness.
+These are hardcoded in `src/config.py`. Source: https://www.geoplace.co.uk/local-authority-resources/street-works-managers/view-swa-codes
+
+**Note:** The original codes (from the spec's Section 10) were incorrect — they mapped to the wrong boroughs (e.g. 5210 was Camden, not Croydon; 5540 was Hounslow, not Lambeth). Corrected in March 2026 after verifying against GeoPlace registry. The TfL code in GeoPlace is listed as numeric 20; Street Manager may format this as "20" or "0020" — needs verification from live permit notifications.
 
 ---
 
@@ -815,7 +825,7 @@ These are hardcoded in `src/config.py`. Once live notifications arrive, we can v
 
 - **SNS delivery failures:** AWS SNS retries up to 20 times over approximately one hour. The app is designed to always return 200 for valid (signed) messages, even if downstream processing fails, to prevent SNS from retrying already-processed messages.
 - **SNS signature verification:** All incoming messages are cryptographically verified against AWS signing certificates. Unsigned or spoofed requests are rejected with 403. Exception: `SubscriptionConfirmation` messages are processed even if signature verification fails, since the `SubscribeURL` is a one-time self-validating token.
-- **Request logging:** Every incoming POST is logged at INFO level with full headers and body, so requests can be reconstructed from deploy logs even if processing fails.
+- **Request logging:** Incoming notifications are logged at INFO level with event type and object reference. Full headers/body logging was used during initial setup and removed once the subscription was confirmed.
 - **Notion API rate limits:** The Notion API has rate limits (currently 3 requests/second). Basic backoff implemented on failure.
 - **Malformed notifications:** Logged and skipped. The process never crashes on bad input.
 - **Startup resilience:** If Notion cache warming or borough boundary loading fails, the app still starts in "degraded" mode — the health endpoint responds, but notifications won't be processed. This prevents Railway from entering a restart loop.

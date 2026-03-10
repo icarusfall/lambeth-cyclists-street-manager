@@ -35,7 +35,7 @@ class TestRealBoundaries:
     def test_brixton_road_is_lambeth(self, geo_filter):
         """Brixton Road (A23, TfL TLRN) — should geo-match to Lambeth."""
         include, borough = geo_filter.check({
-            "highway_authority_swa_code": "0999",  # TfL
+            "highway_authority_swa_code": "20",  # TfL
             "works_location_coordinates": "POINT(531100.00 176100.00)",
         })
         assert include is True
@@ -44,7 +44,7 @@ class TestRealBoundaries:
     def test_borough_high_street_is_southwark(self, geo_filter):
         """Borough High Street — should match Southwark."""
         include, borough = geo_filter.check({
-            "highway_authority_swa_code": "0999",
+            "highway_authority_swa_code": "20",
             "works_location_coordinates": "POINT(532600.00 180100.00)",
         })
         assert include is True
@@ -53,7 +53,7 @@ class TestRealBoundaries:
     def test_streatham_high_road_is_lambeth(self, geo_filter):
         """Streatham High Road — should match Lambeth."""
         include, borough = geo_filter.check({
-            "highway_authority_swa_code": "0999",
+            "highway_authority_swa_code": "20",
             "works_location_coordinates": "POINT(530300.00 171200.00)",
         })
         assert include is True
@@ -62,7 +62,7 @@ class TestRealBoundaries:
     def test_croydon_town_centre(self, geo_filter):
         """Croydon town centre — should match Croydon."""
         include, borough = geo_filter.check({
-            "highway_authority_swa_code": "0999",
+            "highway_authority_swa_code": "20",
             "works_location_coordinates": "POINT(532600.00 165300.00)",
         })
         assert include is True
@@ -71,7 +71,7 @@ class TestRealBoundaries:
     def test_canary_wharf_rejected(self, geo_filter):
         """Canary Wharf (Tower Hamlets) — should NOT match any target borough."""
         include, _ = geo_filter.check({
-            "highway_authority_swa_code": "0999",
+            "highway_authority_swa_code": "20",
             "works_location_coordinates": "POINT(537900.00 180300.00)",
         })
         assert include is False
@@ -79,7 +79,7 @@ class TestRealBoundaries:
     def test_islington_rejected(self, geo_filter):
         """Islington — should NOT match any target borough."""
         include, _ = geo_filter.check({
-            "highway_authority_swa_code": "0999",
+            "highway_authority_swa_code": "20",
             "works_location_coordinates": "POINT(531500.00 183500.00)",
         })
         assert include is False

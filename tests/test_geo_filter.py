@@ -65,7 +65,7 @@ class TestGeoFilter:
     def test_swa_code_fast_path(self, geo_filter):
         """Works by a target borough's highway authority should match immediately."""
         include, borough = geo_filter.check({
-            "highway_authority_swa_code": "5540",  # Lambeth
+            "highway_authority_swa_code": "5660",  # Lambeth
             "street_name": "TEST STREET",
         })
         assert include is True
@@ -74,7 +74,7 @@ class TestGeoFilter:
     def test_tfl_road_in_lambeth_matches_via_geo(self, geo_filter):
         """TfL-managed roads in Lambeth should match via point-in-polygon."""
         include, borough = geo_filter.check({
-            "highway_authority_swa_code": "0999",  # TfL
+            "highway_authority_swa_code": "20",  # TfL
             "works_location_coordinates": "POINT(531100.00 176100.00)",  # Brixton Road
         })
         assert include is True
@@ -105,7 +105,7 @@ class TestGeoFilter:
     def test_activity_coordinates_fallback(self, geo_filter):
         """Activities using activity_coordinates should be geo-filtered."""
         include, borough = geo_filter.check({
-            "highway_authority_swa_code": "0999",  # TfL
+            "highway_authority_swa_code": "20",  # TfL
             "activity_coordinates": "POINT(531100.00 176100.00)",  # Brixton Road
         })
         assert include is True
@@ -114,7 +114,7 @@ class TestGeoFilter:
     def test_activity_linestring_in_lambeth(self, geo_filter):
         """Activity LINESTRING coordinates in Lambeth should match."""
         include, borough = geo_filter.check({
-            "highway_authority_swa_code": "0999",
+            "highway_authority_swa_code": "20",
             "activity_coordinates": "LINESTRING(531100.00 176100.00,531200.00 176200.00)",
         })
         assert include is True

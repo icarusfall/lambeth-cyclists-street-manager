@@ -39,7 +39,7 @@ class TestSnsWebhook:
         notification = {
             "event_type": "WORK_START",
             "object_data": {
-                "highway_authority_swa_code": "5540",
+                "highway_authority_swa_code": "5660",
                 "permit_reference_number": "TEST-001",
                 "street_name": "TEST ROAD",
                 "traffic_management_type_ref": "road_closure",
