@@ -26,11 +26,11 @@
 | 1 | Deployment to Railway | DONE |
 | 1 | Street Manager open data registration | PARTIAL — activity + section-58 confirmed; permit topic needs re-registration |
 | 1 | Notion Roadworks database created & connected | DONE |
-| 1 | Tests (50 passing) | DONE |
+| 1 | Tests (69 passing) | DONE |
 | 2 | TfL Live Disruptions API integration | DONE |
 | 2 | Disruptions Notion database | DONE |
-| 3 | STATS19 cycling collision data import | NOT STARTED |
-| 3 | Cycling Collisions Notion database | NOT STARTED |
+| 3 | STATS19 cycling collision data import | DONE |
+| 3 | Cycling Collisions Notion database | DONE |
 | 4 | D-TRO integration | NOT STARTED |
 | 4 | Traffic Orders Notion database | NOT STARTED |
 | 5 | TfL Cycling Infrastructure Database (CID) reference layer | NOT STARTED |
@@ -68,6 +68,8 @@
 13. **Activity events have a different payload shape than permits.** The `prod-activity-topic` sends events with different field names (e.g. `activity_reference_number` not `permit_reference_number`, `activity_coordinates` not `works_location_coordinates`, `start_date`/`end_date` not `proposed_start_date`/`proposed_end_date`). A normalisation layer in `src/pipeline.py` (`_normalise_activity_data()`) maps activity fields to permit equivalents before the rest of the pipeline runs. Activity coordinates can be LINESTRING (not just POINT); the geo-filter extracts the midpoint for polygon containment checks.
 
 14. **SNS subscription status.** Only `prod-activity-topic` and `prod-section-58-topic` were successfully subscribed on 10 March 2026. The `prod-permit-topic` subscription failed due to a malformed endpoint URL (path got doubled). Ticket raised with Street Manager helpdesk (SPBS) to re-register. Permit events are the main data source — until re-subscribed, only activity and Section 58 events are received.
+
+15. **STATS19 uses stdlib `csv`, not pandas.** The original spec called for pandas to parse STATS19 CSVs. Used stdlib `csv.DictReader` instead — the data is simple enough that pandas would be unnecessary overhead, and it keeps the dependency footprint small. All coded integer values are mapped to human-readable labels via lookup dicts in the importer module.
 
 ---
 
@@ -556,7 +558,7 @@ Implemented in `src/classifier/claude.py`. Uses Claude Haiku (`claude-haiku-4-5-
 | Coordinates | Rich text | WGS84 lon,lat |
 | Last Updated | Date | When this record was last updated |
 
-### 6.4 Cycling Collisions Database (Phase 3) — NOT STARTED
+### 6.4 Cycling Collisions Database (Phase 3) — DONE
 
 | Property | Type | Description |
 |----------|------|-------------|
@@ -673,26 +675,26 @@ All items complete. Polling live, writing to Notion.
 **New files:** `src/tfl/__init__.py`, `src/tfl/disruptions.py`, `src/tfl/pipeline.py`, `tests/test_tfl_disruptions.py`
 **Modified files:** `src/main.py` (asyncio poller task), `src/config.py` (new env vars), `src/geo/filter.py` (`check_wgs84_point()`), `src/notion/writer.py` (disruptions cache + upsert), `src/notion/schemas.py` (`disruption_to_notion_properties()`), `src/classifier/claude.py` (`get_disruption_cycling_summary()`)
 
-### Phase 3: STATS19 Cycling Collision Data — NOT STARTED
+### Phase 3: STATS19 Cycling Collision Data — DONE
 
 **Priority: HIGH.** The most powerful dataset for cycling advocacy. Implementation is straightforward (CSV download + filter + Notion write), but it's a batch job rather than real-time.
 
 1. **Collision data importer** (`src/stats19/importer.py`)
-   - Download collision, casualty, and vehicle CSVs from https://www.gov.uk/government/statistical-data-sets/road-safety-open-data
-   - Parse CSVs with pandas
-   - Filter collisions to those within target borough polygons (coordinates are WGS84 `longitude`/`latitude` columns)
-   - Join to casualties table, filter to rows where `casualty_type` indicates pedal cyclist
-   - Join to vehicles table to identify other vehicle types involved
-2. **Create Notion Cycling Collisions database** with schema from Section 6.4
-3. **Notion writer extension** — bulk write collision records, dedup on `accident_index`
-4. **Backfill script** (`scripts/backfill_collisions.py`) — one-off import of historical data (suggest last 5 years: 2020–2024)
-5. **Scheduled job** — check quarterly for new STATS19 data releases (or run manually when new data drops in September/November)
-6. **Add env var:** `NOTION_COLLISIONS_DB_ID`
+   - Downloads collision, casualty, and vehicle CSVs from DfT road safety open data
+   - Uses stdlib `csv` module (no pandas dependency needed)
+   - Filters collisions to those within target borough polygons (coordinates are WGS84, same geo-filter reused)
+   - Joins to casualties table, filters to rows where `casualty_type == 1` (pedal cyclist)
+   - Joins to vehicles table to identify other vehicle types involved (deduped)
+   - Maps all coded integer values to human-readable labels (severity, vehicle type, light conditions, weather, road surface, junction detail)
+   - Supports single-year download or last-5-years combined file
+2. **Notion Cycling Collisions database** created with schema from Section 6.4
+3. **Notion writer extension** — collision cache, warm, find, upsert methods (dedup on `collision_index`)
+4. **Backfill script** (`scripts/backfill_collisions.py`) — `python -m scripts.backfill_collisions [--year 2024] [--last5]`
+5. **Scheduled updates** — run manually when new STATS19 data drops (typically September/November each year)
+6. **Env var:** `NOTION_COLLISIONS_DB_ID` configured in Railway
 
-**New files:** `src/stats19/__init__.py`, `src/stats19/importer.py`, `scripts/backfill_collisions.py`
-**New dependency:** `pandas`
-
-**Implementation note:** The STATS19 CSVs use coded integer values (not text labels). The DfT provides a lookup guide (Excel) to decode them. The importer should map codes to human-readable labels before writing to Notion.
+**Files:** `src/stats19/__init__.py`, `src/stats19/importer.py`, `scripts/backfill_collisions.py`
+**Tests:** 14 tests in `tests/test_stats19.py` (filtering, severity mapping, vehicle dedup, road name building, Notion property mapping, lookup tables)
 
 ### Phase 4: D-TRO Integration — NOT STARTED
 
@@ -789,8 +791,8 @@ Street Manager uses British National Grid (EPSG:27700) throughout. Borough bound
 | Anthropic API Key | DONE | Configured in Railway env vars |
 | TfL API Key registration | DONE (not needed) | Works without key at lower rate limits. Optional `TFL_API_KEY` env var supported |
 | Notion Disruptions Database | DONE | Created with schema from Section 6.3. DB ID configured in Railway env vars |
-| STATS19 data download | NOT STARTED | Phase 3 — download from https://www.gov.uk/government/statistical-data-sets/road-safety-open-data |
-| Notion Cycling Collisions Database | NOT STARTED | Phase 3 |
+| STATS19 data download | DONE | Phase 3 — downloads from https://data.dft.gov.uk/road-accidents-safety-data/ |
+| Notion Cycling Collisions Database | DONE | Phase 3 — created, DB ID configured in Railway env vars |
 | D-TRO Service registration | NOT STARTED | Phase 4 — register at https://d-tro.dft.gov.uk |
 | Notion Traffic Orders Database | NOT STARTED | Phase 4 |
 | TfL CID data download | NOT STARTED | Phase 5 — download from https://cycling.data.tfl.gov.uk/ |

@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     notion_api_key: str = ""
     notion_roadworks_db_id: str = ""
     notion_disruptions_db_id: str = ""
+    notion_collisions_db_id: str = ""
 
     # TfL (optional — works without key at lower rate limits)
     tfl_api_key: str = ""

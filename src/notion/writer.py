@@ -22,10 +22,13 @@ class NotionWriter:
         self._client = AsyncClient(auth=settings.notion_api_key)
         self._db_id = settings.notion_roadworks_db_id
         self._disruptions_db_id = settings.notion_disruptions_db_id
+        self._collisions_db_id = settings.notion_collisions_db_id
         # In-memory cache: permit_reference -> notion page_id
         self._cache: dict[str, str] = {}
         # Disruptions cache: tfl_disruption_id -> notion page_id
         self._disruptions_cache: dict[str, str] = {}
+        # Collisions cache: collision_index -> notion page_id
+        self._collisions_cache: dict[str, str] = {}
         self._cache_warmed = False
 
     async def warm_cache(self) -> None:
@@ -236,3 +239,77 @@ class NotionWriter:
                     logger.info("Marked disruption %s as Resolved", did)
                 except Exception:
                     logger.exception("Failed to mark disruption %s as Resolved", did)
+
+    # --- Collisions ---
+
+    async def warm_collisions_cache(self) -> None:
+        """Pre-populate the collisions cache from the Notion Collisions DB."""
+        if not self._collisions_db_id:
+            return
+        logger.info("Warming collisions cache from Notion...")
+        try:
+            count = 0
+            has_more = True
+            start_cursor = None
+            while has_more:
+                query_params = {
+                    "database_id": self._collisions_db_id,
+                    "page_size": 100,
+                }
+                if start_cursor:
+                    query_params["start_cursor"] = start_cursor
+                response = await self._client.databases.query(**query_params)
+                for page in response["results"]:
+                    ref = self._extract_text_prop(page, "Collision Reference")
+                    if ref:
+                        self._collisions_cache[ref] = page["id"]
+                        count += 1
+                has_more = response.get("has_more", False)
+                start_cursor = response.get("next_cursor")
+            logger.info("Collisions cache warmed with %d entries", count)
+        except Exception:
+            logger.exception("Failed to warm collisions cache")
+
+    async def find_collision(self, collision_ref: str) -> str | None:
+        """Look up a Notion page ID by collision reference."""
+        if collision_ref in self._collisions_cache:
+            return self._collisions_cache[collision_ref]
+        try:
+            response = await self._client.databases.query(
+                database_id=self._collisions_db_id,
+                filter={
+                    "property": "Collision Reference",
+                    "rich_text": {"equals": collision_ref},
+                },
+                page_size=1,
+            )
+            if response["results"]:
+                page_id = response["results"][0]["id"]
+                self._collisions_cache[collision_ref] = page_id
+                return page_id
+        except Exception:
+            logger.exception("Notion query failed for collision: %s", collision_ref)
+        return None
+
+    async def upsert_collision(self, collision_ref: str, properties: dict) -> str | None:
+        """Create or update a collision record in Notion."""
+        if not self._collisions_db_id:
+            logger.debug("Collisions DB not configured, skipping write")
+            return None
+        page_id = await self.find_collision(collision_ref)
+        try:
+            if page_id:
+                await self._client.pages.update(page_id=page_id, properties=properties)
+                return page_id
+            else:
+                response = await self._client.pages.create(
+                    parent={"database_id": self._collisions_db_id},
+                    properties=properties,
+                )
+                new_page_id = response["id"]
+                self._collisions_cache[collision_ref] = new_page_id
+                return new_page_id
+        except Exception:
+            logger.exception("Notion upsert failed for collision %s", collision_ref)
+            await asyncio.sleep(1)
+            return None

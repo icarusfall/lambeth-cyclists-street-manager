@@ -240,3 +240,44 @@ def disruption_to_notion_properties(
         props["Coordinates"] = _rich_text(wgs84_coords)
 
     return props
+
+
+def _number(value: int | float) -> dict:
+    return {"number": value}
+
+
+def collision_to_notion_properties(collision) -> dict:
+    """Convert a CyclistCollision to Notion page properties.
+
+    Args:
+        collision: A CyclistCollision dataclass instance.
+
+    Returns:
+        Dict of Notion property values ready for the API.
+    """
+    road = collision.road_name or "Unknown road"
+    title = f"{road} — {collision.date}"
+
+    props = {
+        "Name": _title(title),
+        "Collision Reference": _rich_text(collision.collision_index),
+        "Borough": _select(collision.borough),
+        "Date": _date(collision.date),
+        "Time": _rich_text(collision.time),
+        "Severity": _select(collision.collision_severity),
+        "Number of Cyclists Hurt": _number(collision.num_cyclist_casualties),
+        "Worst Cyclist Severity": _select(collision.worst_cyclist_severity),
+        "Other Vehicles": _rich_text(
+            ", ".join(collision.other_vehicles) if collision.other_vehicles else "None"
+        ),
+        "Road Name": _rich_text(road),
+        "Speed Limit": _number(collision.speed_limit),
+        "Junction Detail": _rich_text(collision.junction_detail),
+        "Light Conditions": _select(collision.light_conditions),
+        "Weather": _select(collision.weather),
+        "Road Surface": _select(collision.road_surface),
+        "Coordinates": _rich_text(f"{collision.longitude:.6f},{collision.latitude:.6f}"),
+        "Data Year": _rich_text(collision.data_year),
+    }
+
+    return props
