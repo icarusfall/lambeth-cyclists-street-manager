@@ -246,6 +246,15 @@ def _number(value: int | float) -> dict:
     return {"number": value}
 
 
+def _parse_stats19_date(date_str: str) -> str:
+    """Convert STATS19 DD/MM/YYYY date to ISO format for Notion."""
+    try:
+        dt = datetime.strptime(date_str, "%d/%m/%Y")
+        return dt.date().isoformat()
+    except (ValueError, TypeError):
+        return ""
+
+
 def collision_to_notion_properties(collision) -> dict:
     """Convert a CyclistCollision to Notion page properties.
 
@@ -262,7 +271,7 @@ def collision_to_notion_properties(collision) -> dict:
         "Name": _title(title),
         "Collision Reference": _rich_text(collision.collision_index),
         "Borough": _select(collision.borough),
-        "Date": _date(collision.date),
+        "Date": _date(_parse_stats19_date(collision.date)),
         "Time": _rich_text(collision.time),
         "Severity": _select(collision.collision_severity),
         "Number of Cyclists Hurt": _number(collision.num_cyclist_casualties),

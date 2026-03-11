@@ -84,8 +84,8 @@ if __name__ == "__main__":
     parser.add_argument("--last5", action="store_true", help="Import last 5 years of data")
     args = parser.parse_args()
 
-    if not args.year and not args.last5:
-        parser.error("Specify either --year or --last5")
+    if not args.year:
+        args.last5 = True
 
     logging.basicConfig(
         level=logging.INFO,

@@ -203,6 +203,7 @@ class TestCollisionNotionProperties:
         assert props["Severity"]["select"]["name"] == "Serious"
         assert props["Number of Cyclists Hurt"]["number"] == 1
         assert props["Other Vehicles"]["rich_text"][0]["text"]["content"] == "Car"
+        assert props["Date"]["date"]["start"] == "2024-07-01"
         assert props["Speed Limit"]["number"] == 30
         assert props["Data Year"]["rich_text"][0]["text"]["content"] == "2024"
 
