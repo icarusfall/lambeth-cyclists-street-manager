@@ -71,6 +71,8 @@
 
 15. **STATS19 uses stdlib `csv`, not pandas.** The original spec called for pandas to parse STATS19 CSVs. Used stdlib `csv.DictReader` instead — the data is simple enough that pandas would be unnecessary overhead, and it keeps the dependency footprint small. All coded integer values are mapped to human-readable labels via lookup dicts in the importer module.
 
+16. **STATS19 dates need DD/MM/YYYY → ISO conversion.** The `_date()` helper was written for Street Manager ISO dates. STATS19 uses `DD/MM/YYYY` format, so a `_parse_stats19_date()` converter was added in `collision_to_notion_properties()`.
+
 ---
 
 ## 1. Project Overview
@@ -689,8 +691,8 @@ All items complete. Polling live, writing to Notion.
    - Supports single-year download or last-5-years combined file
 2. **Notion Cycling Collisions database** created with schema from Section 6.4
 3. **Notion writer extension** — collision cache, warm, find, upsert methods (dedup on `collision_index`)
-4. **Backfill script** (`scripts/backfill_collisions.py`) — `python -m scripts.backfill_collisions [--year 2024] [--last5]`
-5. **Scheduled updates** — run manually when new STATS19 data drops (typically September/November each year)
+4. **Backfill script** (`scripts/backfill_collisions.py`) — `python -m scripts.backfill_collisions [--year 2024]` or omit `--year` to default to last 5 years
+5. **Scheduled updates** — run manually when new STATS19 data drops. 2025 final data is scheduled for September 2026. Initial backfill of 2020–2024 completed 11 March 2026
 6. **Env var:** `NOTION_COLLISIONS_DB_ID` configured in Railway
 
 **Files:** `src/stats19/__init__.py`, `src/stats19/importer.py`, `scripts/backfill_collisions.py`
@@ -791,8 +793,8 @@ Street Manager uses British National Grid (EPSG:27700) throughout. Borough bound
 | Anthropic API Key | DONE | Configured in Railway env vars |
 | TfL API Key registration | DONE (not needed) | Works without key at lower rate limits. Optional `TFL_API_KEY` env var supported |
 | Notion Disruptions Database | DONE | Created with schema from Section 6.3. DB ID configured in Railway env vars |
-| STATS19 data download | DONE | Phase 3 — downloads from https://data.dft.gov.uk/road-accidents-safety-data/ |
-| Notion Cycling Collisions Database | DONE | Phase 3 — created, DB ID configured in Railway env vars |
+| STATS19 data download | DONE | Phase 3 — downloads from https://data.dft.gov.uk/road-accidents-safety-data/. Individual years 2020–2024 available, plus last-5-years combined file. 2025 final data due Sep 2026 |
+| Notion Cycling Collisions Database | DONE | Phase 3 — created, DB ID configured in Railway env vars. Backfill of 2020–2024 completed 11 Mar 2026 |
 | D-TRO Service registration | NOT STARTED | Phase 4 — register at https://d-tro.dft.gov.uk |
 | Notion Traffic Orders Database | NOT STARTED | Phase 4 |
 | TfL CID data download | NOT STARTED | Phase 5 — download from https://cycling.data.tfl.gov.uk/ |
