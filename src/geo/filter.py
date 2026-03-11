@@ -21,18 +21,36 @@ _BNG_POINT_PATTERN = re.compile(r"POINT\(([\d.]+)\s+([\d.]+)\)")
 _BNG_COORD_PAIR = re.compile(r"([\d.]+)\s+([\d.]+)")
 
 
-def parse_bng_wkt_to_wgs84(wkt: str) -> Point | None:
-    """Convert a BNG WKT string (POINT or LINESTRING) to a WGS84 Shapely Point.
+def _centroid_from_pairs(pairs: list[tuple[str, str]]) -> Point | None:
+    """Convert BNG coordinate pairs to a WGS84 point using the centroid."""
+    if not pairs:
+        return None
+    # Average all coordinate pairs for the centroid
+    eastings = [float(p[0]) for p in pairs]
+    northings = [float(p[1]) for p in pairs]
+    easting = sum(eastings) / len(eastings)
+    northing = sum(northings) / len(northings)
+    lon, lat = _transformer.transform(easting, northing)
+    return Point(lon, lat)
 
+
+def parse_bng_wkt_to_wgs84(wkt: str) -> Point | None:
+    """Convert a BNG WKT string to a WGS84 Shapely Point.
+
+    Supports POINT, LINESTRING, and POLYGON geometries.
     For LINESTRING, returns the midpoint of the coordinate list.
+    For POLYGON, returns the centroid of the vertex coordinates.
 
     Args:
         wkt: e.g. "POINT(527155.33 182227.95)" or
-             "LINESTRING(527155.33 182227.95,527200.00 182300.00)"
+             "LINESTRING(527155.33 182227.95,527200.00 182300.00)" or
+             "POLYGON((362452 186379,362448 186373,362457 186374,362452 186379))"
 
     Returns:
         Shapely Point(lon, lat) in WGS84, or None if parsing fails.
     """
+    wkt_upper = wkt.upper().strip()
+
     # Try POINT first (most common for permits)
     point_match = _BNG_POINT_PATTERN.match(wkt)
     if point_match:
@@ -40,9 +58,8 @@ def parse_bng_wkt_to_wgs84(wkt: str) -> Point | None:
         lon, lat = _transformer.transform(easting, northing)
         return Point(lon, lat)
 
-    # Try LINESTRING / MULTILINESTRING (common for activities)
-    if "LINESTRING" in wkt.upper():
-        # Extract all coordinate pairs from inside the parentheses
+    # LINESTRING / MULTILINESTRING (common for activities)
+    if "LINESTRING" in wkt_upper:
         pairs = _BNG_COORD_PAIR.findall(wkt)
         if not pairs:
             logger.warning("Could not parse coordinates from WKT: %.100s", wkt)
@@ -52,6 +69,11 @@ def parse_bng_wkt_to_wgs84(wkt: str) -> Point | None:
         easting, northing = float(pairs[mid][0]), float(pairs[mid][1])
         lon, lat = _transformer.transform(easting, northing)
         return Point(lon, lat)
+
+    # POLYGON / MULTIPOLYGON (some activities use area geometries)
+    if "POLYGON" in wkt_upper:
+        pairs = _BNG_COORD_PAIR.findall(wkt)
+        return _centroid_from_pairs(pairs)
 
     logger.warning("Unsupported WKT geometry: %.100s", wkt)
     return None

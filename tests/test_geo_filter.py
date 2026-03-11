@@ -27,7 +27,16 @@ class TestBngToWgs84:
     def test_invalid_wkt_returns_none(self):
         assert parse_bng_wkt_to_wgs84("INVALID") is None
         assert parse_bng_wkt_to_wgs84("") is None
-        assert parse_bng_wkt_to_wgs84("POLYGON((0 0, 1 1, 2 2, 0 0))") is None
+
+    def test_polygon_returns_centroid(self):
+        """POLYGON should return the centroid of the vertex coordinates."""
+        # BNG polygon roughly in Westminster
+        point = parse_bng_wkt_to_wgs84(
+            "POLYGON((530000 180000,530100 180000,530100 180100,530000 180100,530000 180000))"
+        )
+        assert point is not None
+        assert -0.15 < point.x < -0.10
+        assert 51.49 < point.y < 51.52
 
     def test_linestring_returns_midpoint(self):
         """LINESTRING should return the midpoint of the coordinate list."""
