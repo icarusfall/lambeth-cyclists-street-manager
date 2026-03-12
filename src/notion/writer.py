@@ -23,12 +23,15 @@ class NotionWriter:
         self._db_id = settings.notion_roadworks_db_id
         self._disruptions_db_id = settings.notion_disruptions_db_id
         self._collisions_db_id = settings.notion_collisions_db_id
+        self._traffic_orders_db_id = settings.notion_traffic_orders_db_id
         # In-memory cache: permit_reference -> notion page_id
         self._cache: dict[str, str] = {}
         # Disruptions cache: tfl_disruption_id -> notion page_id
         self._disruptions_cache: dict[str, str] = {}
         # Collisions cache: collision_index -> notion page_id
         self._collisions_cache: dict[str, str] = {}
+        # Traffic orders cache: dtro_id -> notion page_id
+        self._traffic_orders_cache: dict[str, str] = {}
         self._cache_warmed = False
 
     async def warm_cache(self) -> None:
@@ -311,5 +314,81 @@ class NotionWriter:
                 return new_page_id
         except Exception:
             logger.exception("Notion upsert failed for collision %s", collision_ref)
+            await asyncio.sleep(1)
+            return None
+
+    # --- Traffic Orders ---
+
+    async def warm_traffic_orders_cache(self) -> None:
+        """Pre-populate the traffic orders cache from the Notion Traffic Orders DB."""
+        if not self._traffic_orders_db_id:
+            return
+        logger.info("Warming traffic orders cache from Notion...")
+        try:
+            count = 0
+            has_more = True
+            start_cursor = None
+            while has_more:
+                query_params = {
+                    "database_id": self._traffic_orders_db_id,
+                    "page_size": 100,
+                }
+                if start_cursor:
+                    query_params["start_cursor"] = start_cursor
+                response = await self._client.databases.query(**query_params)
+                for page in response["results"]:
+                    ref = self._extract_text_prop(page, "D-TRO ID")
+                    if ref:
+                        self._traffic_orders_cache[ref] = page["id"]
+                        count += 1
+                has_more = response.get("has_more", False)
+                start_cursor = response.get("next_cursor")
+            logger.info("Traffic orders cache warmed with %d entries", count)
+        except Exception:
+            logger.exception("Failed to warm traffic orders cache")
+
+    async def find_traffic_order(self, dtro_id: str) -> str | None:
+        """Look up a Notion page ID by D-TRO ID."""
+        if dtro_id in self._traffic_orders_cache:
+            return self._traffic_orders_cache[dtro_id]
+        try:
+            response = await self._client.databases.query(
+                database_id=self._traffic_orders_db_id,
+                filter={
+                    "property": "D-TRO ID",
+                    "rich_text": {"equals": dtro_id},
+                },
+                page_size=1,
+            )
+            if response["results"]:
+                page_id = response["results"][0]["id"]
+                self._traffic_orders_cache[dtro_id] = page_id
+                return page_id
+        except Exception:
+            logger.exception("Notion query failed for D-TRO: %s", dtro_id)
+        return None
+
+    async def upsert_traffic_order(self, dtro_id: str, properties: dict) -> str | None:
+        """Create or update a traffic order record in Notion."""
+        if not self._traffic_orders_db_id:
+            logger.debug("Traffic Orders DB not configured, skipping write")
+            return None
+        page_id = await self.find_traffic_order(dtro_id)
+        try:
+            if page_id:
+                await self._client.pages.update(page_id=page_id, properties=properties)
+                logger.info("Updated traffic order %s (page %s)", dtro_id, page_id)
+                return page_id
+            else:
+                response = await self._client.pages.create(
+                    parent={"database_id": self._traffic_orders_db_id},
+                    properties=properties,
+                )
+                new_page_id = response["id"]
+                self._traffic_orders_cache[dtro_id] = new_page_id
+                logger.info("Created traffic order %s (page %s)", dtro_id, new_page_id)
+                return new_page_id
+        except Exception:
+            logger.exception("Notion upsert failed for traffic order %s", dtro_id)
             await asyncio.sleep(1)
             return None

@@ -123,3 +123,51 @@ async def get_disruption_cycling_summary(disruption: dict, borough: str) -> str 
     except Exception:
         logger.exception("Claude disruption classification failed")
         return None
+
+
+_TRAFFIC_ORDER_PROMPT = """You are helping a cycling advocacy group understand the impact of traffic regulation orders.
+
+Given this traffic order (D-TRO), write a 1-2 sentence summary of how it affects people cycling in the area. Consider: whether it changes road access, creates new restrictions, affects cycle lanes or routes, or changes parking/loading in ways that affect cycling space.
+
+Order name: {tro_name}
+Borough: {borough}
+Regulation types: {regulation_types}
+Streets: {streets}
+Action: {action_type}
+Description: {description}
+Effective: {effective_date}
+End date: {end_date}
+
+Reply with ONLY the summary, no preamble."""
+
+
+async def get_traffic_order_cycling_summary(details: dict, borough: str) -> str | None:
+    """Generate a Claude-powered cycling impact summary for a traffic order."""
+    if not settings.anthropic_api_key:
+        return None
+
+    streets = ", ".join(details.get("street_names", [])) or "Not specified"
+    reg_types = ", ".join(details.get("regulation_types", [])) or "Unknown"
+
+    prompt = _TRAFFIC_ORDER_PROMPT.format(
+        tro_name=details.get("tro_name", "Unknown"),
+        borough=borough,
+        regulation_types=reg_types,
+        streets=streets,
+        action_type=details.get("action_type", "Unknown"),
+        description=details.get("provision_description", ""),
+        effective_date=details.get("effective_date", "Unknown"),
+        end_date=details.get("regulation_end", "Not specified"),
+    )
+
+    try:
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        message = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=200,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return message.content[0].text.strip()
+    except Exception:
+        logger.exception("Claude traffic order classification failed")
+        return None

@@ -26,13 +26,13 @@
 | 1 | Deployment to Railway | DONE |
 | 1 | Street Manager open data registration | PARTIAL — activity + section-58 confirmed; permit topic needs re-registration |
 | 1 | Notion Roadworks database created & connected | DONE |
-| 1 | Tests (69 passing) | DONE |
+| 1–4 | Tests (94 passing) | DONE |
 | 2 | TfL Live Disruptions API integration | DONE |
 | 2 | Disruptions Notion database | DONE |
 | 3 | STATS19 cycling collision data import | DONE |
 | 3 | Cycling Collisions Notion database | DONE |
-| 4 | D-TRO integration | NOT STARTED |
-| 4 | Traffic Orders Notion database | NOT STARTED |
+| 4 | D-TRO integration | DONE |
+| 4 | Traffic Orders Notion database | DONE |
 | 5 | TfL Cycling Infrastructure Database (CID) reference layer | NOT STARTED |
 | 5 | Classifier upgrade: CID-aware route importance scoring | NOT STARTED |
 | 6 | Planning London Datahub integration | NOT STARTED |
@@ -71,7 +71,13 @@
 
 15. **STATS19 uses stdlib `csv`, not pandas.** The original spec called for pandas to parse STATS19 CSVs. Used stdlib `csv.DictReader` instead — the data is simple enough that pandas would be unnecessary overhead, and it keeps the dependency footprint small. All coded integer values are mapped to human-readable labels via lookup dicts in the importer module.
 
-16. **STATS19 dates need DD/MM/YYYY → ISO conversion.** The `_date()` helper was written for Street Manager ISO dates. STATS19 uses `DD/MM/YYYY` format, so a `_parse_stats19_date()` converter was added in `collision_to_notion_properties()`.
+16. **D-TRO API URL differs from spec.** The spec referenced `d-tro.dft.gov.uk` but the actual production portal is `dltro-ui.gov.uk` and the API is at `dtro.dft.gov.uk/v1`. Auth uses API Key + API Secret (not App ID) as OAuth2 client credentials. Max page size is 50, not 100.
+
+17. **D-TRO Regulation Type is multi-select, not select.** Real D-TRO data shows orders with multiple regulation types (e.g. `kerbsideNoWaiting` + `kerbsideParkingPlace` + `kerbsideTaxiRank`). Changed from select to multi-select in Notion schema. Added D-TRO ID (UUID) for dedup, Action Type, Made Date, and Schema Version fields.
+
+18. **D-TRO coordinates use SRID-prefixed BNG linestrings.** Format is `SRID=27700;LINESTRING (...)` — the existing `parse_bng_wkt_to_wgs84()` handles this correctly since it searches for "LINESTRING" in the string and extracts coordinate pairs.
+
+19. **STATS19 dates need DD/MM/YYYY → ISO conversion.** The `_date()` helper was written for Street Manager ISO dates. STATS19 uses `DD/MM/YYYY` format, so a `_parse_stats19_date()` converter was added in `collision_to_notion_properties()`.
 
 ---
 
@@ -177,11 +183,11 @@ This list is configurable via environment variable.
 
 **What:** Machine-readable versions of traffic regulation orders — speed limits, parking restrictions, one-way streets, road closures, weight limits, etc.
 
-**API type:** REST API at https://d-tro.dft.gov.uk
+**API type:** REST API at https://dltro-ui.gov.uk
 
-**Registration:** Free at the URL above.
+**Registration:** Free at the URL above. App credentials obtained 12 March 2026.
 
-**Status:** Beta — coverage for London boroughs likely still patchy. Deferred to Phase 2 — verify data availability before building.
+**Status:** Beta. API credentials obtained 12 March 2026. Data availability explored: Lambeth has 112 D-TROs (road closures, licenses), Lewisham 1 (parking consolidation), Croydon 3 (road closures). Southwark, Wandsworth, Merton, City of London, Westminster not yet publishing. TfL search returns 500 (their issue).
 
 **GitHub:** https://github.com/department-for-transport-public/D-TRO — contains data model docs, schema files, and example data for the current spec version (3.5.0).
 
@@ -199,7 +205,7 @@ This list is configurable via environment variable.
 
 **What:** Real-time feed of traffic disruptions monitored by TfL's 24/7 traffic control centre — accidents, incidents, roadworks, public events, protests, filming, emergency road closures. This catches disruptions that Street Manager does not cover (unplanned incidents, events, TfL-monitored roadworks reported separately).
 
-**API type:** REST API (TfL Unified API). JSON responses. Polls every 5 minutes.
+**API type:** REST API (TfL Unified API). JSON responses. Polls daily at 09:00 UK time.
 
 **Endpoint:** `https://api.tfl.gov.uk/Road/all/Disruption` (with optional `?app_key={KEY}`)
 
@@ -310,9 +316,9 @@ This list is configurable via environment variable.
 │                                                      │
 │  ┌─────────────┐  ┌───────────────────────────────┐  │
 │  │ FastAPI      │  │  Scheduled Jobs (Phase 2+)    │  │
-│  │ webhook      │  │  - TfL Disruptions (5 min)    │  │
-│  │ receiver     │  │  - STATS19 import (quarterly) │  │
-│  │ + SNS sig    │  │  - D-TRO poll (daily)         │  │
+│  │ webhook      │  │  - TfL Disruptions (09:00)    │  │
+│  │ receiver     │  │  - D-TRO poll (09:30)         │  │
+│  │ + SNS sig    │  │  - STATS19 import (quarterly) │  │
 │  │   verify     │  │  - Planning Datahub (daily)   │  │
 │  └──────┬───────┘  └──────────┬────────────────────┘  │
 │         │                     │                       │
@@ -520,24 +526,35 @@ Implemented in `src/classifier/claude.py`. Uses Claude Haiku (`claude-haiku-4-5-
 - **Road Closures** — filter: Traffic Management is "Road closure", Work Status is not "Completed"
 - **This Week** — filter: Proposed Start is within this week
 
-### 6.2 Traffic Orders Database (Phase 4 — D-TRO) — NOT STARTED
+### 6.2 Traffic Orders Database (Phase 4 — D-TRO) — IN PROGRESS
 
 | Property | Type | Description |
 |----------|------|-------------|
-| Name | Title | Summary of the order (auto-generated) |
-| D-TRO Reference | Rich text | Reference from the D-TRO service |
+| Name | Title | TRO name from D-TRO data (e.g. "License (Other) on Landor Road") |
+| D-TRO ID | Rich text | D-TRO UUID — primary key for dedup (e.g. `d268d055-66c1-40cd-ab07-31237c6974d1`) |
+| D-TRO Reference | Rich text | Publisher's reference number (e.g. `145873525`) |
 | Borough | Select | Which target borough |
-| Regulation Type | Select | Speed limit / Parking restriction / One-way / Road closure / Weight limit / Cycle lane / Bus lane / Other |
-| Location Description | Rich text | Human-readable location |
-| Street Name | Rich text | If available |
-| Effective Date | Date | When the order takes effect |
+| Regulation Type | Multi-select | Values from D-TRO data: miscRoadClosure / kerbsideNoWaiting / kerbsideParkingPlace / kerbsidePermitParkingPlace / kerbsideDisabledBadgeHoldersOnly / kerbsideLoadingPlace / kerbsideTaxiRank / speedLimit / oneWay / weightLimit / cycleLane / busLane / other |
+| Location Description | Rich text | Human-readable location (from troName or provision geometry) |
+| Street Name | Rich text | If available from provision data |
+| Made Date | Date | When the order was made/signed |
+| Effective Date | Date | When the order comes into force (`comingIntoForceDate`) |
 | End Date | Date | If temporary |
-| Authority | Rich text | Traffic regulation authority |
+| Authority | Rich text | Traffic regulation authority name (`traName`, e.g. "LONDON BOROUGH OF LAMBETH") |
+| Action Type | Select | new / amendment / revocation |
 | Cycling Impact | Select | Positive / Negative / Neutral / Needs Review |
 | Cycling Summary | Rich text | Claude-generated assessment |
-| Order Status | Select | Proposed / In force / Revoked |
-| Coordinates | Rich text | WGS84 lon,lat |
+| Coordinates | Rich text | WGS84 lon,lat (from provision geometry, if available) |
+| Schema Version | Rich text | D-TRO schema version (e.g. "3.4.0") |
 | Last Updated | Date | When this record was last updated |
+
+**Notion views for Traffic Orders:**
+
+- **All Orders** — sort by Effective Date descending
+- **Road Closures** — filter: Regulation Type contains "miscRoadClosure"
+- **By Borough** — grouped by Borough
+- **Cycling Relevant** — filter: Cycling Impact is "Positive" or "Negative"
+- **Recent** — filter: Effective Date is within last 30 days
 
 ### 6.3 TfL Disruptions Database (Phase 2) — DONE
 
@@ -692,25 +709,27 @@ All items complete. Polling live, writing to Notion.
 2. **Notion Cycling Collisions database** created with schema from Section 6.4
 3. **Notion writer extension** — collision cache, warm, find, upsert methods (dedup on `collision_index`)
 4. **Backfill script** (`scripts/backfill_collisions.py`) — `python -m scripts.backfill_collisions [--year 2024]` or omit `--year` to default to last 5 years
-5. **Scheduled updates** — run manually when new STATS19 data drops. 2025 final data is scheduled for September 2026. Initial backfill of 2020–2024 completed 11 March 2026
+5. **Scheduled updates** — run manually when new STATS19 data drops. 2025 final data is scheduled for September 2026. Initial backfill of 2020–2024 completed 12 March 2026
 6. **Env var:** `NOTION_COLLISIONS_DB_ID` configured in Railway
 
 **Files:** `src/stats19/__init__.py`, `src/stats19/importer.py`, `scripts/backfill_collisions.py`
 **Tests:** 14 tests in `tests/test_stats19.py` (filtering, severity mapping, vehicle dedup, road name building, Notion property mapping, lookup tables)
 
-### Phase 4: D-TRO Integration — NOT STARTED
+### Phase 4: D-TRO Integration — DONE
 
-**Priority: MEDIUM.** Valuable data (traffic regulation orders), but coverage for London boroughs may still be patchy. Check data availability before building.
+All items complete. 116 D-TROs backfilled (112 Lambeth, 1 Lewisham, 3 Croydon). Other target boroughs not yet publishing.
 
-1. **Explore the D-TRO API** at https://d-tro.dft.gov.uk — register, query for London boroughs, assess data volume and quality
-2. **Verify Lambeth is publishing.** Lambeth has implemented digital traffic orders through AppyWay's Traffic Suite, so may be among the first boroughs on D-TRO. If no London data exists yet, defer further.
-3. **D-TRO client** (`src/dtro/client.py`) — daily poll of the D-TRO API
-4. **Geo-filter** D-TRO records against borough boundaries (D-TROs include geographic extents)
-5. **Create Notion Traffic Orders database** with schema from Section 6.2
-6. **Claude classification** — assess cycling relevance (new cycle lane order = positive, parking removal = potentially positive, speed limit increase = negative, etc.)
-7. **Add env vars:** `DTRO_API_KEY`, `NOTION_TRAFFIC_ORDERS_DB_ID`
+1. **Explore the D-TRO API** — DONE. Auth: OAuth2 client credentials (API Key + API Secret → bearer token, 30 min TTL). Production base: `https://dtro.dft.gov.uk/v1`. Endpoints: `POST /search` (filter by `traCreator` SWA code, max page size 50), `GET /dtros/<id>`, `POST /events` (changes since timestamp). Schema v3.4.0.
+2. **Verify Lambeth is publishing** — DONE. Lambeth has 112 D-TROs (road closures, parking suspensions, cycle lane closures via AppyWay). Lewisham has 1 (parking consolidation), Croydon has 3 (road closures).
+3. **D-TRO client** (`src/dtro/client.py`) — DONE. OAuth2 token management with auto-refresh, search by TRA code, fetch by ID, events endpoint.
+4. **D-TRO pipeline** (`src/dtro/pipeline.py`) — DONE. Extracts details from full D-TRO records (regulation types, street names from regulationLocation places, BNG→WGS84 coordinates, time validity). Rule-based cycling impact classifier: road/cycle lane closures = Negative, new cycle lanes = Positive, parking-only = Neutral, others = Needs Review. Optional Claude Haiku summary for Negative/Needs Review.
+5. **Notion Traffic Orders database** — DONE. Schema from Section 6.2 (updated with D-TRO ID, multi-select regulation types, action type, schema version). Backfill of 116 D-TROs completed 12 March 2026.
+6. **Backfill script** (`scripts/backfill_traffic_orders.py`) — `python -m scripts.backfill_traffic_orders`
+7. **Env vars:** `DTRO_APP_ID`, `DTRO_API_KEY`, `DTRO_API_SECRET`, `NOTION_TRAFFIC_ORDERS_DB_ID` — configured in Railway and `.env`
+8. **Tests:** 25 tests (classifier for all regulation types, detail extraction, street name cleaning, coordinate conversion, Notion property mapping)
 
-**New files:** `src/dtro/__init__.py`, `src/dtro/client.py`
+**New files:** `src/dtro/__init__.py`, `src/dtro/client.py`, `src/dtro/pipeline.py`, `scripts/backfill_traffic_orders.py`, `scripts/explore_dtro.py`, `tests/test_dtro.py`
+**Modified files:** `src/config.py` (new env vars), `src/notion/writer.py` (traffic orders cache + upsert), `src/notion/schemas.py` (`traffic_order_to_notion_properties()`, `_multi_select()`), `src/classifier/claude.py` (`get_traffic_order_cycling_summary()`)
 
 ### Phase 5: TfL Cycling Infrastructure Database (CID) — NOT STARTED
 
@@ -794,9 +813,9 @@ Street Manager uses British National Grid (EPSG:27700) throughout. Borough bound
 | TfL API Key registration | DONE (not needed) | Works without key at lower rate limits. Optional `TFL_API_KEY` env var supported |
 | Notion Disruptions Database | DONE | Created with schema from Section 6.3. DB ID configured in Railway env vars |
 | STATS19 data download | DONE | Phase 3 — downloads from https://data.dft.gov.uk/road-accidents-safety-data/. Individual years 2020–2024 available, plus last-5-years combined file. 2025 final data due Sep 2026 |
-| Notion Cycling Collisions Database | DONE | Phase 3 — created, DB ID configured in Railway env vars. Backfill of 2020–2024 completed 11 Mar 2026 |
-| D-TRO Service registration | NOT STARTED | Phase 4 — register at https://d-tro.dft.gov.uk |
-| Notion Traffic Orders Database | NOT STARTED | Phase 4 |
+| Notion Cycling Collisions Database | DONE | Phase 3 — created, DB ID configured in Railway env vars. Backfill of 2020–2024 completed 12 Mar 2026 |
+| D-TRO Service registration | DONE | Phase 4 — registered at https://dltro-ui.gov.uk, app credentials obtained 12 Mar 2026. Env vars: `DTRO_APP_ID`, `DTRO_API_KEY`, `DTRO_API_SECRET` |
+| Notion Traffic Orders Database | DONE | Phase 4 — created, DB ID configured in Railway env vars. Backfill of 116 D-TROs completed 12 Mar 2026 |
 | TfL CID data download | NOT STARTED | Phase 5 — download from https://cycling.data.tfl.gov.uk/ |
 | Planning London Datahub exploration | NOT STARTED | Phase 6 |
 | Notion Development Activity Database | NOT STARTED | Phase 6 |
@@ -866,6 +885,13 @@ lambeth-cyclists-street-manager/
 │   │   ├── __init__.py
 │   │   ├── disruptions.py                 # TfL API client, geo extraction, classifier
 │   │   └── pipeline.py                    # Fetch → filter → classify → Notion
+│   ├── dtro/
+│   │   ├── __init__.py
+│   │   ├── client.py                      # D-TRO API OAuth2 + search/fetch
+│   │   └── pipeline.py                    # D-TRO → classify → Notion
+│   ├── stats19/
+│   │   ├── __init__.py
+│   │   └── importer.py                    # STATS19 CSV download, filter, Notion mapping
 │   ├── classifier/
 │   │   ├── __init__.py
 │   │   ├── rules.py                       # Rule-based cycling impact classification
@@ -882,17 +908,22 @@ lambeth-cyclists-street-manager/
 │   ├── test_notion_schemas.py             # Property mapping tests
 │   ├── test_integration.py                # Real boundary data tests
 │   ├── test_tfl_disruptions.py            # TfL classifier, geo, schema tests
+│   ├── test_stats19.py                    # STATS19 filtering, mapping, lookup tests
+│   ├── test_dtro.py                       # D-TRO classifier, extraction, schema tests
 │   └── fixtures/
 │       ├── sample_permit_notification.json
 │       └── sample_tfl_notification.json
-└── scripts/                               # (empty — may be used for backfill later)
+└── scripts/
+    ├── backfill_collisions.py             # STATS19 backfill: python -m scripts.backfill_collisions
+    ├── backfill_traffic_orders.py         # D-TRO backfill: python -m scripts.backfill_traffic_orders
+    └── explore_dtro.py                    # D-TRO API explorer: python -m scripts.explore_dtro
 ```
 
 ---
 
 ## 13. Testing Strategy
 
-50 tests passing. Coverage:
+94 tests passing. Coverage:
 
 - **Geo-filtering (11 tests):** BNG→WGS84 conversion with known coordinates, SWA code fast path, point-in-polygon with real borough boundaries (Brixton Road→Lambeth, Borough High Street→Southwark, Streatham→Lambeth, Croydon town centre→Croydon), rejection of coordinates outside target area (Canary Wharf, Islington).
 - **Classification (8 tests):** All traffic management types, emergency works, footway vs carriageway, unknown types.
@@ -900,6 +931,8 @@ lambeth-cyclists-street-manager/
 - **Notion schemas (3 tests):** Basic property mapping, missing fields, optional fields omitted.
 - **Integration (4 tests):** Real boundary data loading, real coordinate matching.
 - **TfL disruptions (17 tests):** Impact classification for all real TfL categories (Collisions, Hazards, Works, Breakdowns, Planned events, Network delays), severity handling, GeoJSON point/linestring extraction, null geography handling, Notion property mapping with full/missing/summary fields.
+- **STATS19 collisions (14 tests):** Filtering by casualty type, severity mapping, vehicle type dedup, road name building, Notion property mapping, lookup table coverage.
+- **D-TRO traffic orders (25 tests):** Cycling impact classification for all regulation types (road closure, cycle lane closure, one-way, cycle lane, parking, loading, speed limit, mixed), detail extraction from full D-TRO records (regulation types, street names, coordinate conversion, time validity, provision description), Notion property mapping (multi-select, dates, coordinates, optional summary).
 
 ---
 
@@ -933,7 +966,7 @@ lambeth-cyclists-street-manager/
 
 **D-TRO (Phase 4):**
 - D-TRO GitHub: https://github.com/department-for-transport-public/D-TRO
-- D-TRO service: https://d-tro.dft.gov.uk
+- D-TRO service: https://dltro-ui.gov.uk
 - Lambeth digital traffic orders (AppyWay case study): https://appyway.com/portfolio/unlocking-sustainability-lambeth-council-implements-d-tros-and-uses-traffic-suite-to-manage-and-monitor-their-sustainable-kerbside-vision/
 
 **TfL Cycling Infrastructure Database (Phase 5):**

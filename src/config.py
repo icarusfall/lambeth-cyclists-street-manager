@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     # TfL (optional — works without key at lower rate limits)
     tfl_api_key: str = ""
 
+    # D-TRO (Phase 4)
+    dtro_app_id: str = ""
+    dtro_api_key: str = ""
+    dtro_api_secret: str = ""
+    notion_traffic_orders_db_id: str = ""
+
     # Anthropic (optional)
     anthropic_api_key: str = ""
 

@@ -242,6 +242,65 @@ def disruption_to_notion_properties(
     return props
 
 
+def _multi_select(values: list[str]) -> dict:
+    return {"multi_select": [{"name": v} for v in values]}
+
+
+def traffic_order_to_notion_properties(
+    details: dict,
+    borough: str,
+    cycling_impact: str,
+    cycling_summary: str | None = None,
+) -> dict:
+    """Convert D-TRO details to Notion page properties.
+
+    Args:
+        details: Flat dict from dtro.pipeline.extract_dtro_details().
+        borough: Matched borough name.
+        cycling_impact: "Positive", "Negative", "Neutral", or "Needs Review".
+        cycling_summary: Claude-generated summary, or None.
+
+    Returns:
+        Dict of Notion property values ready for the API.
+    """
+    tro_name = details.get("tro_name", "Unknown")
+    street_names = details.get("street_names", [])
+    location = ", ".join(street_names) if street_names else ""
+
+    props = {
+        "Name": _title(tro_name),
+        "D-TRO ID": _rich_text(details.get("dtro_id", "")),
+        "D-TRO Reference": _rich_text(details.get("reference", "")),
+        "Borough": _select(borough),
+        "Regulation Type": _multi_select(details.get("regulation_types", [])),
+        "Location Description": _rich_text(
+            details.get("provision_description", "") or location
+        ),
+        "Street Name": _rich_text(location),
+        "Made Date": _date(details.get("made_date")),
+        "Effective Date": _date(details.get("effective_date")),
+        "Authority": _rich_text(details.get("tra_name", "")),
+        "Action Type": _select(details.get("action_type", "new").capitalize()),
+        "Cycling Impact": _select(cycling_impact),
+        "Schema Version": _rich_text(details.get("schema_version", "")),
+        "Last Updated": _date(datetime.utcnow().isoformat()),
+    }
+
+    # End date from regulation time validity
+    reg_end = details.get("regulation_end")
+    if reg_end:
+        props["End Date"] = _date(reg_end)
+
+    if cycling_summary:
+        props["Cycling Summary"] = _rich_text(cycling_summary)
+
+    coords = details.get("coordinates")
+    if coords:
+        props["Coordinates"] = _rich_text(coords)
+
+    return props
+
+
 def _number(value: int | float) -> dict:
     return {"number": value}
 
