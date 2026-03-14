@@ -37,9 +37,10 @@
 | 5 | Classifier upgrade: CID-aware route importance scoring | DONE |
 | 5 | TfL Cycleway routes (named routes like Cycleway 5, 7, etc.) | DONE |
 | 5 | "Nearby Cycling Infrastructure" Notion field (all 3 databases) | DONE |
-| 6 | Planning London Datahub integration | NOT STARTED |
-| 6 | Development Activity Notion database | NOT STARTED |
-| 7 | USRN enrichment, historical analysis, alerts, dashboard, agenda integration | NOT STARTED |
+| 6 | Planning London Datahub integration | PARKED — volume too high for Notion; revisit after Postgres migration |
+| 6 | Development Activity Notion database | PARKED |
+| 7 | USRN enrichment, historical analysis, alerts, dashboard, agenda integration | DEFERRED — dashboard/visualisation split to separate project |
+| — | Data Dictionary (DATA_DICTIONARY.md) | DONE |
 
 ### Changes from Original Spec
 
