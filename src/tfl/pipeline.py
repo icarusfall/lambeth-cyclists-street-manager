@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 
 from src.classifier.claude import get_disruption_cycling_summary
+from src.classifier.rules import upgrade_impact_with_cid
+from src.geo.cycling_infrastructure import CyclingInfrastructureIndex
 from src.geo.filter import GeoFilter
 from src.notion.schemas import disruption_to_notion_properties
 from src.notion.writer import NotionWriter
@@ -17,7 +19,11 @@ from src.tfl.disruptions import (
 logger = logging.getLogger(__name__)
 
 
-async def poll_disruptions(geo_filter: GeoFilter, notion_writer: NotionWriter) -> int:
+async def poll_disruptions(
+    geo_filter: GeoFilter,
+    notion_writer: NotionWriter,
+    cid_index: CyclingInfrastructureIndex | None = None,
+) -> int:
     """Fetch TfL disruptions, filter, classify, and write to Notion.
 
     Returns the number of disruptions processed (created or updated).
@@ -49,6 +55,14 @@ async def poll_disruptions(geo_filter: GeoFilter, notion_writer: NotionWriter) -
         # Classify cycling impact
         cycling_impact = classify_disruption_impact(disruption)
 
+        # Upgrade impact if near cycling infrastructure
+        cid_description = None
+        if cid_index and point:
+            cid_result = cid_index.check_proximity(point)
+            if cid_result:
+                cycling_impact = upgrade_impact_with_cid(cycling_impact, cid_result)
+                cid_description = cid_result.format_notion()
+
         # Optional Claude summary for high/medium
         cycling_summary = None
         if cycling_impact in ("high", "medium"):
@@ -64,6 +78,7 @@ async def poll_disruptions(geo_filter: GeoFilter, notion_writer: NotionWriter) -
             cycling_impact=cycling_impact,
             cycling_summary=cycling_summary,
             wgs84_coords=wgs84_coords,
+            nearby_cycling_infra=cid_description,
         )
 
         await notion_writer.upsert_disruption(disruption_id, properties)

@@ -11,6 +11,7 @@ from fastapi import FastAPI
 
 from src.config import settings
 from src.geo.boundaries import load_borough_polygons
+from src.geo.cycling_infrastructure import CyclingInfrastructureIndex
 from src.geo.filter import GeoFilter
 from src.notion.writer import NotionWriter
 from src.pipeline import Pipeline
@@ -29,6 +30,7 @@ _app_state = {
     "disruptions_last_count": 0,
     "last_dtro_poll": None,
     "dtro_last_count": 0,
+    "cid_features": 0,
     "status": "starting",
     "error": None,
 }
@@ -44,10 +46,24 @@ async def lifespan(app: FastAPI):
         geojson_path = Path(__file__).parent.parent / "data" / "london_boroughs.geojson"
         borough_polygons = load_borough_polygons(str(geojson_path), settings.get_target_boroughs())
 
+        # Load cycling infrastructure index (optional — files may not exist)
+        data_dir = Path(__file__).parent.parent / "data"
+        cid_index = None
+        try:
+            cid_index = CyclingInfrastructureIndex.load(data_dir)
+            if cid_index.feature_count > 0:
+                _app_state["cid_features"] = cid_index.feature_count
+                logger.info("CID index loaded: %d cycling infrastructure features", cid_index.feature_count)
+            else:
+                logger.info("CID data files not found — running without cycling infrastructure index")
+                cid_index = None
+        except Exception:
+            logger.exception("Failed to load CID index — running without it")
+
         # Initialise components
         geo_filter = GeoFilter(borough_polygons)
         notion_writer = NotionWriter()
-        pipeline = Pipeline(geo_filter, notion_writer)
+        pipeline = Pipeline(geo_filter, notion_writer, cid_index=cid_index)
 
         # Warm the Notion caches (loads existing refs to avoid duplicates)
         if settings.notion_api_key and settings.notion_roadworks_db_id:
@@ -89,7 +105,7 @@ async def lifespan(app: FastAPI):
         poller_task = None
         if settings.notion_disruptions_db_id:
             poller_task = asyncio.create_task(
-                _tfl_disruptions_poller(geo_filter, notion_writer)
+                _tfl_disruptions_poller(geo_filter, notion_writer, cid_index)
             )
             logger.info("TfL disruptions poller started (daily at 09:00 UK time)")
         else:
@@ -99,7 +115,7 @@ async def lifespan(app: FastAPI):
         dtro_poller_task = None
         if settings.notion_traffic_orders_db_id and settings.dtro_api_key:
             dtro_poller_task = asyncio.create_task(
-                _dtro_poller(notion_writer)
+                _dtro_poller(notion_writer, cid_index)
             )
             logger.info("D-TRO poller started (daily at 09:30 UK time)")
         else:
@@ -124,7 +140,9 @@ async def lifespan(app: FastAPI):
 
 
 async def _tfl_disruptions_poller(
-    geo_filter: GeoFilter, notion_writer: NotionWriter
+    geo_filter: GeoFilter,
+    notion_writer: NotionWriter,
+    cid_index: CyclingInfrastructureIndex | None = None,
 ) -> None:
     """Poll TfL disruptions daily at 09:00 UK time.
 
@@ -134,7 +152,7 @@ async def _tfl_disruptions_poller(
 
     # Initial poll on startup
     try:
-        count = await poll_disruptions(geo_filter, notion_writer)
+        count = await poll_disruptions(geo_filter, notion_writer, cid_index)
         _app_state["last_disruption_poll"] = datetime.now(timezone.utc).isoformat()
         _app_state["disruptions_last_count"] = count
     except Exception:
@@ -152,14 +170,17 @@ async def _tfl_disruptions_poller(
         await asyncio.sleep(wait_seconds)
 
         try:
-            count = await poll_disruptions(geo_filter, notion_writer)
+            count = await poll_disruptions(geo_filter, notion_writer, cid_index)
             _app_state["last_disruption_poll"] = datetime.now(timezone.utc).isoformat()
             _app_state["disruptions_last_count"] = count
         except Exception:
             logger.exception("TfL disruptions poll failed")
 
 
-async def _dtro_poller(notion_writer: NotionWriter) -> None:
+async def _dtro_poller(
+    notion_writer: NotionWriter,
+    cid_index: CyclingInfrastructureIndex | None = None,
+) -> None:
     """Poll D-TRO API daily at 09:30 UK time.
 
     Runs an initial poll on startup, then sleeps until the next 09:30.
@@ -169,7 +190,7 @@ async def _dtro_poller(notion_writer: NotionWriter) -> None:
 
     # Initial poll on startup
     try:
-        count = await poll_traffic_orders(notion_writer)
+        count = await poll_traffic_orders(notion_writer, cid_index)
         _app_state["last_dtro_poll"] = datetime.now(timezone.utc).isoformat()
         _app_state["dtro_last_count"] = count
     except Exception:
@@ -185,7 +206,7 @@ async def _dtro_poller(notion_writer: NotionWriter) -> None:
         await asyncio.sleep(wait_seconds)
 
         try:
-            count = await poll_traffic_orders(notion_writer)
+            count = await poll_traffic_orders(notion_writer, cid_index)
             _app_state["last_dtro_poll"] = datetime.now(timezone.utc).isoformat()
             _app_state["dtro_last_count"] = count
         except Exception:
@@ -214,6 +235,7 @@ async def health():
         "disruptions_last_count": _app_state["disruptions_last_count"],
         "last_dtro_poll": _app_state["last_dtro_poll"],
         "dtro_last_count": _app_state["dtro_last_count"],
+        "cid_features": _app_state["cid_features"],
         "boroughs_monitored": len(settings.get_target_boroughs()),
         "error": _app_state["error"],
     }

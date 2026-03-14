@@ -11,6 +11,10 @@ RUN pip install --no-cache-dir "fastapi>=0.115.0" "uvicorn[standard]>=0.34.0" \
 
 COPY data/ data/
 COPY src/ src/
+COPY scripts/ scripts/
+
+# Download CID cycling infrastructure data at build time
+RUN python -m scripts.download_cid
 
 ENV PORT=8000
 

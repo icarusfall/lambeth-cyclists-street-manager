@@ -12,6 +12,7 @@ import re
 from src.classifier.claude import get_traffic_order_cycling_summary
 from src.config import BOROUGH_SWA_CODES
 from src.dtro.client import DtroClient
+from src.geo.cycling_infrastructure import CyclingInfrastructureIndex
 from src.geo.filter import parse_bng_wkt_to_wgs84
 from src.notion.schemas import traffic_order_to_notion_properties
 from src.notion.writer import NotionWriter
@@ -151,7 +152,10 @@ def extract_dtro_details(full_dtro: dict) -> dict:
     }
 
 
-async def poll_traffic_orders(notion_writer: NotionWriter) -> int:
+async def poll_traffic_orders(
+    notion_writer: NotionWriter,
+    cid_index: CyclingInfrastructureIndex | None = None,
+) -> int:
     """Fetch all D-TROs from target boroughs and write to Notion.
 
     Returns the number of records processed.
@@ -186,6 +190,21 @@ async def poll_traffic_orders(notion_writer: NotionWriter) -> int:
                 details["regulation_types"], details["action_type"]
             )
 
+            # CID proximity check: upgrade Neutral → Needs Review if near cycling infra
+            cid_description = None
+            if cid_index and details.get("coordinates"):
+                coords = details["coordinates"]
+                try:
+                    lon, lat = (float(c) for c in coords.split(","))
+                    from shapely.geometry import Point
+                    cid_result = cid_index.check_proximity(Point(lon, lat))
+                    if cid_result:
+                        cid_description = cid_result.format_notion()
+                        if cycling_impact == "Neutral":
+                            cycling_impact = "Needs Review"
+                except (ValueError, TypeError):
+                    pass
+
             # Optional Claude summary for negative/needs review
             cycling_summary = None
             if cycling_impact in ("Negative", "Needs Review"):
@@ -199,6 +218,7 @@ async def poll_traffic_orders(notion_writer: NotionWriter) -> int:
                 borough=borough,
                 cycling_impact=cycling_impact,
                 cycling_summary=cycling_summary,
+                nearby_cycling_infra=cid_description,
             )
 
             # Check if exists

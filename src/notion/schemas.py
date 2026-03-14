@@ -72,6 +72,7 @@ def work_to_notion_properties(
     cycling_summary: str | None,
     event_type: str,
     wgs84_coords: str | None = None,
+    nearby_cycling_infra: str | None = None,
 ) -> dict:
     """Convert Street Manager work data to Notion page properties.
 
@@ -159,6 +160,9 @@ def work_to_notion_properties(
     if wgs84_coords:
         props["Coordinates"] = _rich_text(wgs84_coords)
 
+    if nearby_cycling_infra:
+        props["Nearby Cycling Infrastructure"] = _rich_text(nearby_cycling_infra)
+
     return props
 
 
@@ -186,6 +190,7 @@ def disruption_to_notion_properties(
     cycling_impact: str,
     cycling_summary: str | None = None,
     wgs84_coords: str | None = None,
+    nearby_cycling_infra: str | None = None,
 ) -> dict:
     """Convert a TfL disruption to Notion page properties.
 
@@ -239,6 +244,9 @@ def disruption_to_notion_properties(
     if wgs84_coords:
         props["Coordinates"] = _rich_text(wgs84_coords)
 
+    if nearby_cycling_infra:
+        props["Nearby Cycling Infrastructure"] = _rich_text(nearby_cycling_infra)
+
     return props
 
 
@@ -251,6 +259,7 @@ def traffic_order_to_notion_properties(
     borough: str,
     cycling_impact: str,
     cycling_summary: str | None = None,
+    nearby_cycling_infra: str | None = None,
 ) -> dict:
     """Convert D-TRO details to Notion page properties.
 
@@ -297,6 +306,9 @@ def traffic_order_to_notion_properties(
     coords = details.get("coordinates")
     if coords:
         props["Coordinates"] = _rich_text(coords)
+
+    if nearby_cycling_infra:
+        props["Nearby Cycling Infrastructure"] = _rich_text(nearby_cycling_infra)
 
     return props
 

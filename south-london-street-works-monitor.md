@@ -24,17 +24,19 @@
 | 1 | Cycling impact classifier (rule-based) | DONE |
 | 1 | Claude API enrichment (optional, for high/medium) | DONE |
 | 1 | Deployment to Railway | DONE |
-| 1 | Street Manager open data registration | PARTIAL — activity + section-58 confirmed; permit topic needs re-registration |
+| 1 | Street Manager open data registration | DONE — all three topics confirmed (activity, section-58, permit) |
 | 1 | Notion Roadworks database created & connected | DONE |
-| 1–4 | Tests (94 passing) | DONE |
+| 1–5 | Tests (128 passing) | DONE |
 | 2 | TfL Live Disruptions API integration | DONE |
 | 2 | Disruptions Notion database | DONE |
 | 3 | STATS19 cycling collision data import | DONE |
 | 3 | Cycling Collisions Notion database | DONE |
 | 4 | D-TRO integration | DONE |
 | 4 | Traffic Orders Notion database | DONE |
-| 5 | TfL Cycling Infrastructure Database (CID) reference layer | NOT STARTED |
-| 5 | Classifier upgrade: CID-aware route importance scoring | NOT STARTED |
+| 5 | TfL Cycling Infrastructure Database (CID) reference layer | DONE |
+| 5 | Classifier upgrade: CID-aware route importance scoring | DONE |
+| 5 | TfL Cycleway routes (named routes like Cycleway 5, 7, etc.) | DONE |
+| 5 | "Nearby Cycling Infrastructure" Notion field (all 3 databases) | DONE |
 | 6 | Planning London Datahub integration | NOT STARTED |
 | 6 | Development Activity Notion database | NOT STARTED |
 | 7 | USRN enrichment, historical analysis, alerts, dashboard, agenda integration | NOT STARTED |
@@ -67,7 +69,7 @@
 
 13. **Activity events have a different payload shape than permits.** The `prod-activity-topic` sends events with different field names (e.g. `activity_reference_number` not `permit_reference_number`, `activity_coordinates` not `works_location_coordinates`, `start_date`/`end_date` not `proposed_start_date`/`proposed_end_date`). A normalisation layer in `src/pipeline.py` (`_normalise_activity_data()`) maps activity fields to permit equivalents before the rest of the pipeline runs. Activity coordinates can be LINESTRING (not just POINT); the geo-filter extracts the midpoint for polygon containment checks.
 
-14. **SNS subscription status.** Only `prod-activity-topic` and `prod-section-58-topic` were successfully subscribed on 10 March 2026. The `prod-permit-topic` subscription failed due to a malformed endpoint URL (path got doubled). Ticket raised with Street Manager helpdesk (SPBS) to re-register. Permit events are the main data source — until re-subscribed, only activity and Section 58 events are received.
+14. **SNS subscription status.** All three topics confirmed: `prod-activity-topic` and `prod-section-58-topic` subscribed on 10 March 2026; `prod-permit-topic` re-registered and confirmed week of 14 March 2026 (permit events visible in Railway logs from 14:55 UTC on 14 March 2026).
 
 15. **STATS19 uses stdlib `csv`, not pandas.** The original spec called for pandas to parse STATS19 CSVs. Used stdlib `csv.DictReader` instead — the data is simple enough that pandas would be unnecessary overhead, and it keeps the dependency footprint small. All coded integer values are mapped to human-readable labels via lookup dicts in the importer module.
 
@@ -731,25 +733,28 @@ All items complete. 116 D-TROs backfilled (112 Lambeth, 1 Lewisham, 3 Croydon). 
 **New files:** `src/dtro/__init__.py`, `src/dtro/client.py`, `src/dtro/pipeline.py`, `scripts/backfill_traffic_orders.py`, `scripts/explore_dtro.py`, `tests/test_dtro.py`
 **Modified files:** `src/config.py` (new env vars), `src/notion/writer.py` (traffic orders cache + upsert), `src/notion/schemas.py` (`traffic_order_to_notion_properties()`, `_multi_select()`), `src/classifier/claude.py` (`get_traffic_order_cycling_summary()`)
 
-### Phase 5: TfL Cycling Infrastructure Database (CID) — NOT STARTED
+### Phase 5: TfL Cycling Infrastructure Database (CID) — DONE
 
-**Priority: MEDIUM.** Doesn't add a new Notion database — instead it makes the existing cycling impact classifier significantly smarter by understanding which roads have cycling infrastructure.
+**Completed 14 March 2026.** Loads cycling infrastructure as a static spatial reference layer at startup. Roadworks, disruptions, and traffic orders near cycling infrastructure get their impact rating automatically upgraded (never downgraded). Named Cycleway routes (Cycleway 5, 7, etc.) are also loaded from TfL's ArcGIS FeatureServer.
 
-1. **Download CID data** from https://cycling.data.tfl.gov.uk/ — cycle lanes/tracks JSON, restricted routes JSON
-2. **Load as reference layer** (`src/geo/cycling_infrastructure.py`) — parse CID geometries into Shapely LineStrings/Points, index spatially (R-tree via `rtree` or Shapely STRtree)
-3. **Proximity check function** — given a coordinate, find the nearest CID asset within a configurable radius (e.g. 50m). Return the asset type (segregated cycleway, painted lane, modal filter, etc.)
-4. **Upgrade classifier** — modify `src/classifier/rules.py` to:
-   - Check CID proximity for every roadwork
-   - If roadwork is within 50m of a segregated cycleway → automatically "high" impact
-   - If roadwork is within 50m of a modal filter → flag "medium" (filter may be temporarily removed)
-   - If roadwork is on a road with no nearby cycling infra → lower default impact
-5. **Add field to Roadworks DB:** "Affects Cycle Infrastructure" (rich text — name of nearest asset, e.g. "Cycleway 7 — segregated track")
-6. **Cross-reference cycle routes** — TfL also publishes cycle route data (JSON/KML) showing Cycleways and other routes. Load this alongside CID to flag "Roadwork on Cycleway 5" etc.
+**Data sources:**
+- CID cycle lanes/tracks: `https://cycling.data.tfl.gov.uk/CyclingInfrastructure/data/lines/cycle_lane_track.json` (~29MB, ~25k features all-London, pre-filtered to target boroughs)
+- CID restricted routes (modal filters): `https://cycling.data.tfl.gov.uk/CyclingInfrastructure/data/lines/restricted_route.json` (~1.6MB, ~1.4k features)
+- TfL Cycleway routes: ArcGIS FeatureServer at `services1.arcgis.com/YswvgzOodUvqkoCN/arcgis/rest/services/Cycle_Routes/FeatureServer/11` (146 features, all open routes)
 
-**New files:** `src/geo/cycling_infrastructure.py`
-**Modified files:** `src/classifier/rules.py`, `src/notion/schemas.py`
-**New dependency:** possibly `rtree` for spatial indexing (or use Shapely's built-in STRtree)
-**New data files:** `data/cid_cycle_lanes.json`, `data/cid_restricted_routes.json`, `data/cycle_routes.json`
+**Implementation:**
+1. `scripts/download_cid.py` — downloads and pre-filters CID data to target boroughs, saves to `data/`. Run at Docker build time.
+2. `src/geo/cycling_infrastructure.py` — `CyclingInfrastructureIndex` class using Shapely STRtree (no extra dependency). Loads from pre-filtered JSON files, builds spatial index for 50m proximity queries. Returns `CIDResult` with asset type, description, distance, and route name.
+3. `src/classifier/rules.py` — `upgrade_impact_with_cid()`: upgrade-only logic. Near segregated/stepped/partially-segregated cycleway or named Cycleway route → upgrade to "high". Near modal filter, mandatory/advisory/contraflow lane → upgrade to at least "medium". Shared use paths → no upgrade.
+4. All three pipelines (Street Manager, TfL Disruptions, D-TRO) check CID proximity after rule-based classification. For D-TRO, Neutral → Needs Review if near cycling infra.
+5. New Notion field "Nearby Cycling Infrastructure" on all three databases, e.g. "Cycleway 7 — Segregated cycle track (12m)".
+
+**Priority order** when multiple matches: named Cycleway route > segregated > stepped > partially segregated > mandatory > modal filter > contraflow > advisory > shared use
+
+**New files:** `src/geo/cycling_infrastructure.py`, `scripts/download_cid.py`, `tests/test_cycling_infrastructure.py` (34 tests)
+**Modified files:** `src/classifier/rules.py`, `src/pipeline.py`, `src/tfl/pipeline.py`, `src/dtro/pipeline.py`, `src/main.py`, `src/notion/schemas.py`, `Dockerfile`, `.gitignore`
+**No new dependencies** — STRtree is built into Shapely (already installed)
+**Data files (gitignored, downloaded at build):** `data/cid_cycle_lanes.json`, `data/cid_restricted_routes.json`, `data/cycle_routes.json`
 
 ### Phase 6: Planning London Datahub — NOT STARTED
 
@@ -816,7 +821,7 @@ Street Manager uses British National Grid (EPSG:27700) throughout. Borough bound
 | Notion Cycling Collisions Database | DONE | Phase 3 — created, DB ID configured in Railway env vars. Backfill of 2020–2024 completed 12 Mar 2026 |
 | D-TRO Service registration | DONE | Phase 4 — registered at https://dltro-ui.gov.uk, app credentials obtained 12 Mar 2026. Env vars: `DTRO_APP_ID`, `DTRO_API_KEY`, `DTRO_API_SECRET` |
 | Notion Traffic Orders Database | DONE | Phase 4 — created, DB ID configured in Railway env vars. Backfill of 116 D-TROs completed 12 Mar 2026 |
-| TfL CID data download | NOT STARTED | Phase 5 — download from https://cycling.data.tfl.gov.uk/ |
+| TfL CID data download | DONE | Phase 5 — downloaded at Docker build time via `scripts/download_cid.py`. Pre-filtered to target boroughs. Includes cycle lanes/tracks, restricted routes, and Cycleway routes from ArcGIS |
 | Planning London Datahub exploration | NOT STARTED | Phase 6 |
 | Notion Development Activity Database | NOT STARTED | Phase 6 |
 

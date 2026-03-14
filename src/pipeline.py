@@ -3,7 +3,8 @@
 import logging
 
 from src.geo.filter import GeoFilter, parse_bng_wkt_to_wgs84
-from src.classifier.rules import quick_cycling_impact
+from src.geo.cycling_infrastructure import CyclingInfrastructureIndex
+from src.classifier.rules import quick_cycling_impact, upgrade_impact_with_cid
 from src.classifier.claude import get_cycling_summary
 from src.notion.schemas import work_to_notion_properties
 from src.notion.writer import NotionWriter
@@ -54,9 +55,15 @@ def _normalise_activity_data(notification: dict) -> None:
 class Pipeline:
     """Processes Street Manager notifications through the full pipeline."""
 
-    def __init__(self, geo_filter: GeoFilter, notion_writer: NotionWriter) -> None:
+    def __init__(
+        self,
+        geo_filter: GeoFilter,
+        notion_writer: NotionWriter,
+        cid_index: CyclingInfrastructureIndex | None = None,
+    ) -> None:
         self._geo_filter = geo_filter
         self._notion_writer = notion_writer
+        self._cid_index = cid_index
 
     async def process_notification(self, notification: dict) -> None:
         """Process a single Street Manager SNS notification.
@@ -101,18 +108,26 @@ class Pipeline:
         # Step 2: Rule-based cycling impact classification
         cycling_impact = quick_cycling_impact(object_data)
 
-        # Step 3: Optional Claude enrichment for high/medium impact
-        cycling_summary = None
-        if cycling_impact in ("high", "medium"):
-            cycling_summary = await get_cycling_summary(object_data, borough)
-
-        # Get WGS84 coordinates for reference
+        # Get WGS84 coordinates for reference and CID lookup
         wgs84_coords = None
+        cid_description = None
         coords_wkt = object_data.get("works_location_coordinates")
         if coords_wkt:
             point = parse_bng_wkt_to_wgs84(coords_wkt)
             if point:
                 wgs84_coords = f"{point.x:.6f},{point.y:.6f}"
+
+                # Step 2b: Upgrade impact if near cycling infrastructure
+                if self._cid_index:
+                    cid_result = self._cid_index.check_proximity(point)
+                    if cid_result:
+                        cycling_impact = upgrade_impact_with_cid(cycling_impact, cid_result)
+                        cid_description = cid_result.format_notion()
+
+        # Step 3: Optional Claude enrichment for high/medium impact
+        cycling_summary = None
+        if cycling_impact in ("high", "medium"):
+            cycling_summary = await get_cycling_summary(object_data, borough)
 
         # Step 4: Build Notion properties and upsert
         properties = work_to_notion_properties(
@@ -122,6 +137,7 @@ class Pipeline:
             cycling_summary=cycling_summary,
             event_type=event_type,
             wgs84_coords=wgs84_coords,
+            nearby_cycling_infra=cid_description,
         )
 
         await self._notion_writer.upsert_roadwork(permit_ref, properties)
