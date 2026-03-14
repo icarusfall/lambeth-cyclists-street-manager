@@ -34,6 +34,32 @@ class NotionWriter:
         self._traffic_orders_cache: dict[str, str] = {}
         self._cache_warmed = False
 
+    async def ensure_cid_property(self) -> None:
+        """Ensure 'Nearby Cycling Infrastructure' rich_text property exists on all databases.
+
+        Notion rejects writes to non-existent properties, so we check each DB
+        schema and add the property if missing.  Called once at startup.
+        """
+        prop_name = "Nearby Cycling Infrastructure"
+        db_ids = [
+            id_
+            for id_ in [self._db_id, self._disruptions_db_id, self._traffic_orders_db_id]
+            if id_
+        ]
+        for db_id in db_ids:
+            try:
+                db = await self._client.databases.retrieve(database_id=db_id)
+                if prop_name not in db.get("properties", {}):
+                    logger.info("Adding '%s' property to database %s", prop_name, db_id)
+                    await self._client.databases.update(
+                        database_id=db_id,
+                        properties={prop_name: {"rich_text": {}}},
+                    )
+                else:
+                    logger.debug("'%s' property already exists on %s", prop_name, db_id)
+            except Exception:
+                logger.exception("Failed to ensure CID property on database %s", db_id)
+
     async def warm_cache(self) -> None:
         """Pre-populate the cache by querying all active works from Notion.
 

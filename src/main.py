@@ -65,6 +65,13 @@ async def lifespan(app: FastAPI):
         notion_writer = NotionWriter()
         pipeline = Pipeline(geo_filter, notion_writer, cid_index=cid_index)
 
+        # Ensure CID property exists on all Notion databases before writing
+        if settings.notion_api_key and cid_index is not None:
+            try:
+                await notion_writer.ensure_cid_property()
+            except Exception:
+                logger.exception("Failed to ensure CID property on Notion databases")
+
         # Warm the Notion caches (loads existing refs to avoid duplicates)
         if settings.notion_api_key and settings.notion_roadworks_db_id:
             try:
