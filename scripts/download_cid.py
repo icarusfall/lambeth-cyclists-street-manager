@@ -15,7 +15,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 # Ensure project root is on path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -42,7 +42,8 @@ CYCLE_ROUTES_URL = (
 def _download_json(url: str) -> dict:
     """Download and parse a JSON file from a URL."""
     logger.info("Downloading %s", url[:100])
-    with urlopen(url) as resp:
+    req = Request(url, headers={"User-Agent": "Mozilla/5.0 (LambethCyclists CID Downloader)"})
+    with urlopen(req) as resp:
         return json.loads(resp.read())
 
 
