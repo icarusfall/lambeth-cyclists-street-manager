@@ -635,7 +635,7 @@ Implemented in `src/classifier/claude.py`. Uses Claude Haiku (`claude-haiku-4-5-
 
 ### Phase 1: Street Manager Integration (MVP) — DONE
 
-All items complete. Activity and Section 58 subscriptions confirmed. Permit topic subscription needs re-registration (ticket raised).
+All items complete. Activity and Section 58 subscriptions confirmed. 
 
 1. **Project setup** — DONE
    - Python project with `pyproject.toml` and Dockerfile
@@ -747,12 +747,12 @@ All items complete. 116 D-TROs backfilled (112 Lambeth, 1 Lewisham, 3 Croydon). 
 2. `src/geo/cycling_infrastructure.py` — `CyclingInfrastructureIndex` class using Shapely STRtree (no extra dependency). Loads from pre-filtered JSON files, builds spatial index for 50m proximity queries. Returns `CIDResult` with asset type, description, distance, and route name.
 3. `src/classifier/rules.py` — `upgrade_impact_with_cid()`: upgrade-only logic. Near segregated/stepped/partially-segregated cycleway or named Cycleway route → upgrade to "high". Near modal filter, mandatory/advisory/contraflow lane → upgrade to at least "medium". Shared use paths → no upgrade.
 4. All three pipelines (Street Manager, TfL Disruptions, D-TRO) check CID proximity after rule-based classification. For D-TRO, Neutral → Needs Review if near cycling infra.
-5. New Notion field "Nearby Cycling Infrastructure" on all three databases, e.g. "Cycleway 7 — Segregated cycle track (12m)".
+5. New Notion field "Nearby Cycling Infrastructure" on all three databases, e.g. "Cycleway 7 — Segregated cycle track (12m)". Auto-created at startup via `ensure_cid_property()` in NotionWriter if the property doesn't already exist.
 
 **Priority order** when multiple matches: named Cycleway route > segregated > stepped > partially segregated > mandatory > modal filter > contraflow > advisory > shared use
 
 **New files:** `src/geo/cycling_infrastructure.py`, `scripts/download_cid.py`, `tests/test_cycling_infrastructure.py` (34 tests)
-**Modified files:** `src/classifier/rules.py`, `src/pipeline.py`, `src/tfl/pipeline.py`, `src/dtro/pipeline.py`, `src/main.py`, `src/notion/schemas.py`, `Dockerfile`, `.gitignore`
+**Modified files:** `src/classifier/rules.py`, `src/pipeline.py`, `src/tfl/pipeline.py`, `src/dtro/pipeline.py`, `src/main.py`, `src/notion/schemas.py`, `src/notion/writer.py`, `Dockerfile`, `.gitignore`
 **No new dependencies** — STRtree is built into Shapely (already installed)
 **Data files (gitignored, downloaded at build):** `data/cid_cycle_lanes.json`, `data/cid_restricted_routes.json`, `data/cycle_routes.json`
 
@@ -821,7 +821,8 @@ Street Manager uses British National Grid (EPSG:27700) throughout. Borough bound
 | Notion Cycling Collisions Database | DONE | Phase 3 — created, DB ID configured in Railway env vars. Backfill of 2020–2024 completed 12 Mar 2026 |
 | D-TRO Service registration | DONE | Phase 4 — registered at https://dltro-ui.gov.uk, app credentials obtained 12 Mar 2026. Env vars: `DTRO_APP_ID`, `DTRO_API_KEY`, `DTRO_API_SECRET` |
 | Notion Traffic Orders Database | DONE | Phase 4 — created, DB ID configured in Railway env vars. Backfill of 116 D-TROs completed 12 Mar 2026 |
-| TfL CID data download | DONE | Phase 5 — downloaded at Docker build time via `scripts/download_cid.py`. Pre-filtered to target boroughs. Includes cycle lanes/tracks, restricted routes, and Cycleway routes from ArcGIS |
+| TfL CID data download | DONE | Phase 5 — downloaded at Docker build time via `scripts/download_cid.py`. Pre-filtered to target boroughs. Includes cycle lanes/tracks, restricted routes, and Cycleway routes from ArcGIS. Note: TfL CDN blocks Python's default User-Agent; script sends a custom header. |
+| Notion "Nearby Cycling Infrastructure" property | DONE | Phase 5 — auto-created at startup via `ensure_cid_property()` on all 3 databases (roadworks, disruptions, traffic orders). No manual Notion setup needed. |
 | Planning London Datahub exploration | NOT STARTED | Phase 6 |
 | Notion Development Activity Database | NOT STARTED | Phase 6 |
 
@@ -921,6 +922,7 @@ lambeth-cyclists-street-manager/
 └── scripts/
     ├── backfill_collisions.py             # STATS19 backfill: python -m scripts.backfill_collisions
     ├── backfill_traffic_orders.py         # D-TRO backfill: python -m scripts.backfill_traffic_orders
+    ├── download_cid.py                    # CID data download: python -m scripts.download_cid (run at Docker build)
     └── explore_dtro.py                    # D-TRO API explorer: python -m scripts.explore_dtro
 ```
 
@@ -928,7 +930,7 @@ lambeth-cyclists-street-manager/
 
 ## 13. Testing Strategy
 
-94 tests passing. Coverage:
+128 tests passing. Coverage:
 
 - **Geo-filtering (11 tests):** BNG→WGS84 conversion with known coordinates, SWA code fast path, point-in-polygon with real borough boundaries (Brixton Road→Lambeth, Borough High Street→Southwark, Streatham→Lambeth, Croydon town centre→Croydon), rejection of coordinates outside target area (Canary Wharf, Islington).
 - **Classification (8 tests):** All traffic management types, emergency works, footway vs carriageway, unknown types.
@@ -938,6 +940,7 @@ lambeth-cyclists-street-manager/
 - **TfL disruptions (17 tests):** Impact classification for all real TfL categories (Collisions, Hazards, Works, Breakdowns, Planned events, Network delays), severity handling, GeoJSON point/linestring extraction, null geography handling, Notion property mapping with full/missing/summary fields.
 - **STATS19 collisions (14 tests):** Filtering by casualty type, severity mapping, vehicle type dedup, road name building, Notion property mapping, lookup table coverage.
 - **D-TRO traffic orders (25 tests):** Cycling impact classification for all regulation types (road closure, cycle lane closure, one-way, cycle lane, parking, loading, speed limit, mixed), detail extraction from full D-TRO records (regulation types, street names, coordinate conversion, time validity, provision description), Notion property mapping (multi-select, dates, coordinates, optional summary).
+- **Cycling infrastructure / CID (34 tests):** CIDResult formatting (with/without route name, zero distance), cycle lane classification (all 7 lane types, unknown defaults, priority ordering), spatial index (empty index, nearby feature detection, far feature rejection, priority ordering of cycleway route over advisory and segregated over modal filter, feature count), file loading (from GeoJSON files, empty directory, filtering non-open routes), impact upgrade logic (13 tests covering all upgrade/no-downgrade scenarios for every asset type).
 
 ---
 
