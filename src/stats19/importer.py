@@ -132,7 +132,7 @@ class CyclistCollision:
 async def download_csv(url: str) -> list[dict]:
     """Download a CSV file and return rows as dicts."""
     logger.info("Downloading %s", url)
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=600.0) as client:
         resp = await client.get(url, follow_redirects=True)
         resp.raise_for_status()
 
@@ -162,6 +162,15 @@ def _build_last5_urls() -> tuple[str, str, str]:
         f"{_BASE_URL}/dft-road-casualty-statistics-collision-last-5-years.csv",
         f"{_BASE_URL}/dft-road-casualty-statistics-casualty-last-5-years.csv",
         f"{_BASE_URL}/dft-road-casualty-statistics-vehicle-last-5-years.csv",
+    )
+
+
+def _build_historical_urls() -> tuple[str, str, str]:
+    """Build download URLs for the full 1979-latest historical data."""
+    return (
+        f"{_BASE_URL}/dft-road-casualty-statistics-collision-1979-latest-published-year.csv",
+        f"{_BASE_URL}/dft-road-casualty-statistics-casualty-1979-latest-published-year.csv",
+        f"{_BASE_URL}/dft-road-casualty-statistics-vehicle-1979-latest-published-year.csv",
     )
 
 
@@ -289,6 +298,9 @@ async def import_collisions(
     geo_filter: GeoFilter,
     year: int | None = None,
     use_last5: bool = False,
+    use_historical: bool = False,
+    from_year: int | None = None,
+    to_year: int | None = None,
 ) -> list[CyclistCollision]:
     """Download STATS19 data and return filtered cyclist collisions.
 
@@ -296,19 +308,52 @@ async def import_collisions(
         geo_filter: GeoFilter for borough containment checks.
         year: Specific year to download (e.g. 2024).
         use_last5: If True, download the last 5 years combined file.
+        use_historical: If True, download the full 1979-latest file.
+        from_year: Filter rows to this year or later (used with use_historical).
+        to_year: Filter rows to this year or earlier (used with use_historical).
 
     Returns:
         List of CyclistCollision records.
     """
-    if use_last5:
+    if use_historical:
+        col_url, cas_url, veh_url = _build_historical_urls()
+    elif use_last5:
         col_url, cas_url, veh_url = _build_last5_urls()
     elif year:
         col_url, cas_url, veh_url = _build_collision_urls(year)
     else:
-        raise ValueError("Either year or use_last5 must be specified")
+        raise ValueError("Either year, use_last5, or use_historical must be specified")
 
     collisions = await download_csv(col_url)
     casualties = await download_csv(cas_url)
     vehicles = await download_csv(veh_url)
+
+    # Filter by year range if specified
+    if from_year or to_year:
+        def _year_from_row(row: dict) -> int | None:
+            date_str = row.get("date", "") or row.get("accident_year", "")
+            if not date_str:
+                return None
+            try:
+                # DD/MM/YYYY format
+                if "/" in date_str:
+                    return int(date_str.split("/")[-1])
+                return int(date_str[:4])
+            except (ValueError, IndexError):
+                return None
+
+        before = len(collisions)
+        collisions = [
+            r for r in collisions
+            if (y := _year_from_row(r)) is not None
+            and (from_year is None or y >= from_year)
+            and (to_year is None or y <= to_year)
+        ]
+        # Filter casualties and vehicles to matching collision refs
+        collision_refs = {r.get("accident_index") for r in collisions}
+        casualties = [r for r in casualties if r.get("accident_index") in collision_refs]
+        vehicles = [r for r in vehicles if r.get("accident_index") in collision_refs]
+        logger.info("Year filter %s-%s: %d → %d collisions",
+                     from_year or "any", to_year or "any", before, len(collisions))
 
     return filter_cycling_collisions(collisions, casualties, vehicles, geo_filter)

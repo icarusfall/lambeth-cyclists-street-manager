@@ -2,6 +2,7 @@
 
 Usage:
     python -m scripts.backfill_collisions [--year 2024] [--last5]
+    python -m scripts.backfill_collisions --historical --from-year 2010 --to-year 2019
 
 Downloads STATS19 data from DfT, filters to cyclist collisions in target
 boroughs, and writes to the PostgreSQL database.
@@ -26,7 +27,8 @@ from src.stats19.importer import import_collisions
 logger = logging.getLogger(__name__)
 
 
-async def main(year: int | None, use_last5: bool) -> None:
+async def main(year: int | None, use_last5: bool, use_historical: bool = False,
+               from_year: int | None = None, to_year: int | None = None) -> None:
     if not settings.database_url:
         logger.error("DATABASE_URL not configured")
         return
@@ -37,7 +39,10 @@ async def main(year: int | None, use_last5: bool) -> None:
     geo_filter = GeoFilter(borough_polygons)
 
     logger.info("Downloading and filtering STATS19 data...")
-    collisions = await import_collisions(geo_filter, year=year, use_last5=use_last5)
+    collisions = await import_collisions(
+        geo_filter, year=year, use_last5=use_last5,
+        use_historical=use_historical, from_year=from_year, to_year=to_year,
+    )
     logger.info("Found %d cyclist collisions in target boroughs", len(collisions))
 
     if not collisions:
@@ -74,9 +79,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Backfill STATS19 cycling collision data")
     parser.add_argument("--year", type=int, help="Specific year to import (e.g. 2024)")
     parser.add_argument("--last5", action="store_true", help="Import last 5 years of data")
+    parser.add_argument("--historical", action="store_true",
+                        help="Download full 1979-latest file (large ~4GB total)")
+    parser.add_argument("--from-year", type=int, help="Filter to this year or later")
+    parser.add_argument("--to-year", type=int, help="Filter to this year or earlier")
     args = parser.parse_args()
 
-    if not args.year:
+    if not args.year and not args.historical:
         args.last5 = True
 
     logging.basicConfig(
@@ -84,4 +93,4 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    asyncio.run(main(args.year, args.last5))
+    asyncio.run(main(args.year, args.last5, args.historical, args.from_year, args.to_year))
