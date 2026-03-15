@@ -1,5 +1,6 @@
 """Tests for PostgreSQL database schemas and writer."""
 
+import datetime as dt
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -54,7 +55,7 @@ class TestWorkToDbRow:
         assert row["cycling_impact"] == "High"
         assert row["cycling_summary"] == "Major disruption on key cycling corridor."
         assert row["ttro_required"] is True
-        assert row["proposed_start"] == "2026-03-10"
+        assert row["proposed_start"] == dt.date(2026, 3, 10)
         assert row["lon"] == pytest.approx(-0.114)
         assert row["lat"] == pytest.approx(51.462)
 
@@ -145,7 +146,7 @@ class TestCollisionToDbRow:
 
         assert row["collision_reference"] == "2024010012345"
         assert row["name"] == "BRIXTON ROAD — 15/06/2024"
-        assert row["date"] == "2024-06-15"
+        assert row["date"] == dt.date(2024, 6, 15)
         assert row["severity"] == "Serious"
         assert row["number_of_cyclists_hurt"] == 1
         assert row["other_vehicles"] == "Car, Bus"
@@ -183,7 +184,7 @@ class TestTrafficOrderToDbRow:
         assert row["borough"] == "Lambeth"
         assert row["regulation_type"] == ["miscOneWay"]
         assert row["cycling_impact"] == "Negative"
-        assert row["end_date"] == "2026-06-01"
+        assert row["end_date"] == dt.date(2026, 6, 1)
         assert row["lon"] == pytest.approx(-0.114)
 
 

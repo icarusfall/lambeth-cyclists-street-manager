@@ -203,7 +203,8 @@ class TestCollisionDbRow:
         assert row["severity"] == "Serious"
         assert row["number_of_cyclists_hurt"] == 1
         assert row["other_vehicles"] == "Car"
-        assert row["date"] == "2024-07-01"
+        import datetime as dt
+        assert row["date"] == dt.date(2024, 7, 1)
         assert row["speed_limit"] == 30
         assert row["data_year"] == "2024"
 

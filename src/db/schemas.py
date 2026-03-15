@@ -1,15 +1,15 @@
 """Map data to flat dicts for PostgreSQL INSERT/UPDATE."""
 
-from datetime import datetime
+import datetime as _dt
 
 
-def _parse_date(value: str | None) -> str | None:
-    """Parse an ISO date string to YYYY-MM-DD, or None."""
+def _parse_date(value: str | None) -> _dt.date | None:
+    """Parse an ISO date string to a date object, or None."""
     if not value:
         return None
     try:
-        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return dt.date().isoformat()
+        dt = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return dt.date()
     except (ValueError, TypeError):
         return None
 
@@ -187,9 +187,9 @@ def collision_to_db_row(collision) -> dict:
     name = f"{road} — {collision.date}"
 
     # Parse STATS19 DD/MM/YYYY date
-    date_iso = None
+    date_val = None
     try:
-        date_iso = datetime.strptime(collision.date, "%d/%m/%Y").date().isoformat()
+        date_val = _dt.datetime.strptime(collision.date, "%d/%m/%Y").date()
     except (ValueError, TypeError):
         pass
 
@@ -197,7 +197,7 @@ def collision_to_db_row(collision) -> dict:
         "collision_reference": collision.collision_index,
         "name": name,
         "borough": collision.borough,
-        "date": date_iso,
+        "date": date_val,
         "time": collision.time,
         "severity": collision.collision_severity,
         "number_of_cyclists_hurt": collision.num_cyclist_casualties,

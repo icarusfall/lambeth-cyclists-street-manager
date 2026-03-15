@@ -42,7 +42,7 @@ class DatabaseWriter:
                     lon, lat
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                    $13::date, $14::date, $15::date,
+                    $13, $14, $15,
                     $16, $17, $18, $19, $20, $21, $22, $23
                 )
                 ON CONFLICT (permit_reference) DO UPDATE SET
@@ -101,7 +101,7 @@ class DatabaseWriter:
                     lon, lat
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9,
-                    $10::timestamptz, $11::timestamptz, $12,
+                    $10, $11, $12,
                     $13, $14, $15, $16, $17
                 )
                 ON CONFLICT (disruption_id) DO UPDATE SET
@@ -151,7 +151,7 @@ class DatabaseWriter:
                     light_conditions, weather, road_surface, data_year,
                     lon, lat
                 ) VALUES (
-                    $1, $2, $3, $4::date, $5, $6, $7, $8, $9, $10, $11, $12,
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
                     $13, $14, $15, $16, $17, $18
                 )
                 ON CONFLICT (collision_reference) DO UPDATE SET
@@ -203,7 +203,7 @@ class DatabaseWriter:
                     schema_version, lon, lat
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7,
-                    $8::date, $9::date, $10::date,
+                    $8, $9, $10,
                     $11, $12, $13, $14, $15, $16, $17, $18
                 )
                 ON CONFLICT (dtro_id) DO UPDATE SET

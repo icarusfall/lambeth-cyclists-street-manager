@@ -288,9 +288,10 @@ class TestDbRowProperties:
         row = traffic_order_to_db_row(
             details=details, borough="Lambeth", cycling_impact="Negative",
         )
-        assert row["made_date"] == "2025-09-26"
-        assert row["effective_date"] == "2025-09-26"
-        assert row["end_date"] == "2025-10-07"
+        import datetime as dt
+        assert row["made_date"] == dt.date(2025, 9, 26)
+        assert row["effective_date"] == dt.date(2025, 9, 26)
+        assert row["end_date"] == dt.date(2025, 10, 7)
 
     def test_coordinates_included(self):
         details = extract_dtro_details(LAMBETH_ROAD_CLOSURE)
