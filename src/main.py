@@ -1,4 +1,4 @@
-"""FastAPI application — receives Street Manager SNS notifications and writes to Notion."""
+"""FastAPI application — receives Street Manager SNS notifications and writes to PostgreSQL."""
 
 import asyncio
 import logging
@@ -10,10 +10,10 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI
 
 from src.config import settings
+from src.db.writer import DatabaseWriter
 from src.geo.boundaries import load_borough_polygons
 from src.geo.cycling_infrastructure import CyclingInfrastructureIndex
 from src.geo.filter import GeoFilter
-from src.notion.writer import NotionWriter
 from src.pipeline import Pipeline
 from src.street_manager.webhook import router as webhook_router, set_notification_handler
 from src.dtro.pipeline import poll_traffic_orders
@@ -41,6 +41,10 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
     logger.info("Starting South London Street Works Monitor")
 
+    db_writer = None
+    poller_task = None
+    dtro_poller_task = None
+
     try:
         # Load borough boundaries
         geojson_path = Path(__file__).parent.parent / "data" / "london_boroughs.geojson"
@@ -62,36 +66,21 @@ async def lifespan(app: FastAPI):
 
         # Initialise components
         geo_filter = GeoFilter(borough_polygons)
-        notion_writer = NotionWriter()
-        pipeline = Pipeline(geo_filter, notion_writer, cid_index=cid_index)
 
-        # Ensure CID property exists on all Notion databases before writing
-        if settings.notion_api_key and cid_index is not None:
-            try:
-                await notion_writer.ensure_cid_property()
-            except Exception:
-                logger.exception("Failed to ensure CID property on Notion databases")
+        # PostgreSQL writer
+        if not settings.database_url:
+            logger.warning("DATABASE_URL not set — running in dry-run mode")
+            _app_state["status"] = "degraded"
+            _app_state["error"] = "DATABASE_URL not configured"
+            _app_state["started_at"] = datetime.now(timezone.utc).isoformat()
+            yield
+            return
 
-        # Warm the Notion caches (loads existing refs to avoid duplicates)
-        if settings.notion_api_key and settings.notion_roadworks_db_id:
-            try:
-                await notion_writer.warm_cache()
-            except Exception:
-                logger.exception("Failed to warm Notion cache — will query per item")
-        else:
-            logger.warning("Notion not configured — running in dry-run mode")
+        db_writer = DatabaseWriter(settings.database_url)
+        await db_writer.connect()
+        logger.info("PostgreSQL writer connected")
 
-        if settings.notion_api_key and settings.notion_disruptions_db_id:
-            try:
-                await notion_writer.warm_disruptions_cache()
-            except Exception:
-                logger.exception("Failed to warm disruptions cache")
-
-        if settings.notion_api_key and settings.notion_traffic_orders_db_id:
-            try:
-                await notion_writer.warm_traffic_orders_cache()
-            except Exception:
-                logger.exception("Failed to warm traffic orders cache")
+        pipeline = Pipeline(geo_filter, db_writer, cid_index=cid_index)
 
         # Wire up the SNS webhook to the pipeline
         async def handle_notification(notification: dict) -> None:
@@ -108,32 +97,25 @@ async def lifespan(app: FastAPI):
             ", ".join(settings.get_target_boroughs()),
         )
 
-        # Start TfL disruptions poller if configured
-        poller_task = None
-        if settings.notion_disruptions_db_id:
-            poller_task = asyncio.create_task(
-                _tfl_disruptions_poller(geo_filter, notion_writer, cid_index)
-            )
-            logger.info("TfL disruptions poller started (daily at 09:00 UK time)")
-        else:
-            logger.info("TfL disruptions poller not started — NOTION_DISRUPTIONS_DB_ID not set")
+        # Start TfL disruptions poller
+        poller_task = asyncio.create_task(
+            _tfl_disruptions_poller(geo_filter, db_writer, cid_index)
+        )
+        logger.info("TfL disruptions poller started (daily at 09:00 UK time)")
 
         # Start D-TRO poller if configured
-        dtro_poller_task = None
-        if settings.notion_traffic_orders_db_id and settings.dtro_api_key:
+        if settings.dtro_api_key:
             dtro_poller_task = asyncio.create_task(
-                _dtro_poller(notion_writer, cid_index)
+                _dtro_poller(db_writer, cid_index)
             )
             logger.info("D-TRO poller started (daily at 09:30 UK time)")
         else:
-            logger.info("D-TRO poller not started — NOTION_TRAFFIC_ORDERS_DB_ID or DTRO_API_KEY not set")
+            logger.info("D-TRO poller not started — DTRO_API_KEY not set")
 
     except Exception as e:
         logger.exception("Startup error — app will serve health endpoint but not process notifications")
         _app_state["status"] = "degraded"
         _app_state["error"] = str(e)
-        poller_task = None
-        dtro_poller_task = None
 
     _app_state["started_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -143,41 +125,38 @@ async def lifespan(app: FastAPI):
         poller_task.cancel()
     if dtro_poller_task:
         dtro_poller_task.cancel()
+    if db_writer:
+        await db_writer.close()
     logger.info("Shutting down")
 
 
 async def _tfl_disruptions_poller(
     geo_filter: GeoFilter,
-    notion_writer: NotionWriter,
+    db_writer: DatabaseWriter,
     cid_index: CyclingInfrastructureIndex | None = None,
 ) -> None:
-    """Poll TfL disruptions daily at 09:00 UK time.
-
-    Runs an initial poll on startup, then sleeps until the next 09:00.
-    """
+    """Poll TfL disruptions daily at 09:00 UK time."""
     uk_tz = ZoneInfo("Europe/London")
 
     # Initial poll on startup
     try:
-        count = await poll_disruptions(geo_filter, notion_writer, cid_index)
+        count = await poll_disruptions(geo_filter, db_writer, cid_index)
         _app_state["last_disruption_poll"] = datetime.now(timezone.utc).isoformat()
         _app_state["disruptions_last_count"] = count
     except Exception:
         logger.exception("TfL disruptions initial poll failed")
 
     while True:
-        # Calculate seconds until next 09:00 UK time
         now = datetime.now(uk_tz)
         next_run = now.replace(hour=9, minute=0, second=0, microsecond=0)
         if now >= next_run:
-            # Already past 9am today, schedule for tomorrow
             next_run = next_run + timedelta(days=1)
         wait_seconds = (next_run - now).total_seconds()
         logger.info("Next TfL disruptions poll at %s (in %.0f seconds)", next_run, wait_seconds)
         await asyncio.sleep(wait_seconds)
 
         try:
-            count = await poll_disruptions(geo_filter, notion_writer, cid_index)
+            count = await poll_disruptions(geo_filter, db_writer, cid_index)
             _app_state["last_disruption_poll"] = datetime.now(timezone.utc).isoformat()
             _app_state["disruptions_last_count"] = count
         except Exception:
@@ -185,19 +164,15 @@ async def _tfl_disruptions_poller(
 
 
 async def _dtro_poller(
-    notion_writer: NotionWriter,
+    db_writer: DatabaseWriter,
     cid_index: CyclingInfrastructureIndex | None = None,
 ) -> None:
-    """Poll D-TRO API daily at 09:30 UK time.
-
-    Runs an initial poll on startup, then sleeps until the next 09:30.
-    Offset from TfL poller (09:00) to spread API load.
-    """
+    """Poll D-TRO API daily at 09:30 UK time."""
     uk_tz = ZoneInfo("Europe/London")
 
     # Initial poll on startup
     try:
-        count = await poll_traffic_orders(notion_writer, cid_index)
+        count = await poll_traffic_orders(db_writer, cid_index)
         _app_state["last_dtro_poll"] = datetime.now(timezone.utc).isoformat()
         _app_state["dtro_last_count"] = count
     except Exception:
@@ -213,7 +188,7 @@ async def _dtro_poller(
         await asyncio.sleep(wait_seconds)
 
         try:
-            count = await poll_traffic_orders(notion_writer, cid_index)
+            count = await poll_traffic_orders(db_writer, cid_index)
             _app_state["last_dtro_poll"] = datetime.now(timezone.utc).isoformat()
             _app_state["dtro_last_count"] = count
         except Exception:

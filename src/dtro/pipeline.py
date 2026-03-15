@@ -1,4 +1,4 @@
-"""D-TRO processing pipeline: search → fetch full records → classify → Notion.
+"""D-TRO processing pipeline: search → fetch full records → classify → PostgreSQL.
 
 Can be run as a one-off backfill (all existing D-TROs) or as an incremental
 poll (using the /events endpoint with a `since` timestamp).
@@ -11,11 +11,11 @@ import re
 
 from src.classifier.claude import get_traffic_order_cycling_summary
 from src.config import BOROUGH_SWA_CODES
+from src.db.schemas import traffic_order_to_db_row
+from src.db.writer import DatabaseWriter
 from src.dtro.client import DtroClient
 from src.geo.cycling_infrastructure import CyclingInfrastructureIndex
 from src.geo.filter import parse_bng_wkt_to_wgs84
-from src.notion.schemas import traffic_order_to_notion_properties
-from src.notion.writer import NotionWriter
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +77,9 @@ def classify_traffic_order_impact(regulation_types: list[str], action_type: str)
 
 
 def extract_dtro_details(full_dtro: dict) -> dict:
-    """Extract key fields from a full D-TRO record for Notion.
+    """Extract key fields from a full D-TRO record.
 
-    Returns a flat dict with the fields needed for traffic_order_to_notion_properties.
+    Returns a flat dict with the fields needed for traffic_order_to_db_row.
     """
     source = full_dtro.get("data", {}).get("source", {})
     provisions = source.get("provision", [])
@@ -153,10 +153,10 @@ def extract_dtro_details(full_dtro: dict) -> dict:
 
 
 async def poll_traffic_orders(
-    notion_writer: NotionWriter,
+    db_writer: DatabaseWriter,
     cid_index: CyclingInfrastructureIndex | None = None,
 ) -> int:
-    """Fetch all D-TROs from target boroughs and write to Notion.
+    """Fetch all D-TROs from target boroughs and write to PostgreSQL.
 
     Returns the number of records processed.
     """
@@ -168,7 +168,6 @@ async def poll_traffic_orders(
 
     processed = 0
     created = 0
-    updated = 0
     failed = 0
 
     for item in search_results:
@@ -212,33 +211,25 @@ async def poll_traffic_orders(
                     details, borough
                 )
 
-            # Build Notion properties
-            properties = traffic_order_to_notion_properties(
+            # Write to PostgreSQL
+            db_row = traffic_order_to_db_row(
                 details=details,
                 borough=borough,
                 cycling_impact=cycling_impact,
                 cycling_summary=cycling_summary,
                 nearby_cycling_infra=cid_description,
             )
-
-            # Check if exists
-            existing = await notion_writer.find_traffic_order(dtro_id)
-
-            # Upsert to Notion
-            page_id = await notion_writer.upsert_traffic_order(dtro_id, properties)
-            if page_id:
-                if existing:
-                    updated += 1
-                else:
-                    created += 1
+            result = await db_writer.upsert_traffic_order(dtro_id, db_row)
+            if result:
+                created += 1
             else:
                 failed += 1
 
             processed += 1
             if processed % 20 == 0:
                 logger.info(
-                    "D-TRO progress: %d/%d (created=%d, updated=%d, failed=%d)",
-                    processed, len(search_results), created, updated, failed,
+                    "D-TRO progress: %d/%d (created=%d, failed=%d)",
+                    processed, len(search_results), created, failed,
                 )
 
         except Exception:
@@ -246,7 +237,7 @@ async def poll_traffic_orders(
             failed += 1
 
     logger.info(
-        "D-TRO done. Created %d, updated %d, failed %d (total %d)",
-        created, updated, failed, len(search_results),
+        "D-TRO done. Created %d, failed %d (total %d)",
+        created, failed, len(search_results),
     )
     return processed

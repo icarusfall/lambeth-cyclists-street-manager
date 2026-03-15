@@ -35,7 +35,7 @@ class TestSnsWebhook:
         assert data["status"] in ("ok", "starting", "degraded")
 
     def test_notification_returns_200(self, client):
-        """Valid notification should be accepted (200) even without Notion configured."""
+        """Valid notification should be accepted (200) even without database configured."""
         notification = {
             "event_type": "WORK_START",
             "object_data": {

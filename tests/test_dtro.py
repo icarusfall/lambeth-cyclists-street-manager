@@ -1,9 +1,9 @@
-"""Tests for D-TRO integration — classifier, detail extraction, Notion schema mapping."""
+"""Tests for D-TRO integration — classifier, detail extraction, schema mapping."""
 
 import pytest
 
 from src.dtro.pipeline import classify_traffic_order_impact, extract_dtro_details
-from src.notion.schemas import traffic_order_to_notion_properties
+from src.db.schemas import traffic_order_to_db_row
 
 
 # --- Sample D-TRO records (based on real data) ---
@@ -257,63 +257,59 @@ class TestExtractDetails:
         assert details["coordinates"] is None
 
 
-class TestNotionProperties:
-    """Test Notion property mapping for traffic orders."""
+class TestDbRowProperties:
+    """Test database row mapping for traffic orders."""
 
     def test_basic_properties(self):
         details = extract_dtro_details(LAMBETH_ROAD_CLOSURE)
-        props = traffic_order_to_notion_properties(
+        row = traffic_order_to_db_row(
             details=details,
             borough="Lambeth",
             cycling_impact="Negative",
             cycling_summary="Road closure on Bedford Road affects cycling access.",
         )
-        assert props["Name"]["title"][0]["text"]["content"] == "License (Other) on Landor Road"
-        assert props["D-TRO ID"]["rich_text"][0]["text"]["content"] == "d268d055-66c1-40cd-ab07-31237c6974d1"
-        assert props["Borough"]["select"]["name"] == "Lambeth"
-        assert props["Cycling Impact"]["select"]["name"] == "Negative"
-        assert props["Cycling Summary"]["rich_text"][0]["text"]["content"] == "Road closure on Bedford Road affects cycling access."
-        assert props["Action Type"]["select"]["name"] == "New"
+        assert row["name"] == "License (Other) on Landor Road"
+        assert row["dtro_id"] == "d268d055-66c1-40cd-ab07-31237c6974d1"
+        assert row["borough"] == "Lambeth"
+        assert row["cycling_impact"] == "Negative"
+        assert row["cycling_summary"] == "Road closure on Bedford Road affects cycling access."
+        assert row["action_type"] == "New"
 
-    def test_regulation_type_multi_select(self):
+    def test_regulation_type_list(self):
         details = extract_dtro_details(LEWISHAM_PARKING)
-        props = traffic_order_to_notion_properties(
+        row = traffic_order_to_db_row(
             details=details, borough="Lewisham", cycling_impact="Neutral",
         )
-        reg_types = props["Regulation Type"]["multi_select"]
-        names = [r["name"] for r in reg_types]
-        assert "kerbsideNoWaiting" in names
-        assert "kerbsideParkingPlace" in names
+        assert "kerbsideNoWaiting" in row["regulation_type"]
+        assert "kerbsideParkingPlace" in row["regulation_type"]
 
     def test_dates(self):
         details = extract_dtro_details(LAMBETH_ROAD_CLOSURE)
-        props = traffic_order_to_notion_properties(
+        row = traffic_order_to_db_row(
             details=details, borough="Lambeth", cycling_impact="Negative",
         )
-        assert props["Made Date"]["date"]["start"] == "2025-09-26"
-        assert props["Effective Date"]["date"]["start"] == "2025-09-26"
-        assert props["End Date"]["date"]["start"] == "2025-10-07"
+        assert row["made_date"] == "2025-09-26"
+        assert row["effective_date"] == "2025-09-26"
+        assert row["end_date"] == "2025-10-07"
 
     def test_coordinates_included(self):
         details = extract_dtro_details(LAMBETH_ROAD_CLOSURE)
-        props = traffic_order_to_notion_properties(
+        row = traffic_order_to_db_row(
             details=details, borough="Lambeth", cycling_impact="Negative",
         )
-        assert "Coordinates" in props
-        coords = props["Coordinates"]["rich_text"][0]["text"]["content"]
-        assert "," in coords  # "lon,lat" format
+        assert row["lon"] is not None
+        assert row["lat"] is not None
 
     def test_no_summary_when_none(self):
         details = extract_dtro_details(LAMBETH_ROAD_CLOSURE)
-        props = traffic_order_to_notion_properties(
+        row = traffic_order_to_db_row(
             details=details, borough="Lambeth", cycling_impact="Negative",
         )
-        assert "Cycling Summary" not in props
+        assert row["cycling_summary"] is None
 
     def test_street_name_populated(self):
         details = extract_dtro_details(LAMBETH_ROAD_CLOSURE)
-        props = traffic_order_to_notion_properties(
+        row = traffic_order_to_db_row(
             details=details, borough="Lambeth", cycling_impact="Negative",
         )
-        street = props["Street Name"]["rich_text"][0]["text"]["content"]
-        assert "Bedford Road" in street
+        assert "Bedford Road" in row["street_name"]

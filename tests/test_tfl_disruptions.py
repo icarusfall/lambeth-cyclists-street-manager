@@ -4,7 +4,7 @@ import pytest
 from shapely.geometry import Point
 
 from src.tfl.disruptions import classify_disruption_impact, extract_point
-from src.notion.schemas import disruption_to_notion_properties
+from src.db.schemas import disruption_to_db_row
 
 
 class TestClassifyDisruptionImpact:
@@ -75,7 +75,7 @@ class TestExtractPoint:
         assert extract_point({"geography": None}) is None
 
 
-class TestDisruptionToNotionProperties:
+class TestDisruptionDbRow:
     def test_basic_mapping(self):
         disruption = {
             "id": "TIMS-12345",
@@ -89,41 +89,40 @@ class TestDisruptionToNotionProperties:
             "startDateTime": "2026-03-09T10:00:00Z",
             "endDateTime": "2026-03-10T18:00:00Z",
         }
-        props = disruption_to_notion_properties(
+        row = disruption_to_db_row(
             disruption=disruption,
             borough="Lambeth",
             cycling_impact="high",
             wgs84_coords="-0.1178,51.4613",
         )
 
-        assert props["Name"]["title"][0]["text"]["content"] == "Brixton Road — Collisions"
-        assert props["TfL Disruption ID"]["rich_text"][0]["text"]["content"] == "TIMS-12345"
-        assert props["Borough"]["select"]["name"] == "Lambeth"
-        assert props["Category"]["select"]["name"] == "Collisions"
-        assert props["Status"]["select"]["name"] == "Active"
-        assert props["Severity"]["rich_text"][0]["text"]["content"] == "Serious"
-        assert props["Corridors"]["rich_text"][0]["text"]["content"] == "A23, A204"
-        assert props["Cycling Impact"]["select"]["name"] == "High"
-        assert props["Coordinates"]["rich_text"][0]["text"]["content"] == "-0.1178,51.4613"
+        assert row["name"] == "Brixton Road — Collisions"
+        assert row["disruption_id"] == "TIMS-12345"
+        assert row["borough"] == "Lambeth"
+        assert row["category"] == "Collisions"
+        assert row["status"] == "Active"
+        assert row["severity"] == "Serious"
+        assert row["corridors"] == "A23, A204"
+        assert row["cycling_impact"] == "High"
+        assert row["lon"] == pytest.approx(-0.1178)
+        assert row["lat"] == pytest.approx(51.4613)
 
     def test_missing_fields_handled(self):
-        props = disruption_to_notion_properties(
+        row = disruption_to_db_row(
             disruption={"id": "TEST-1"},
             borough="Southwark",
             cycling_impact="low",
         )
-        assert props["Name"]["title"][0]["text"]["content"] == "Unknown location — Other"
-        assert props["Borough"]["select"]["name"] == "Southwark"
-        assert "Cycling Summary" not in props
-        assert "Coordinates" not in props
+        assert row["name"] == "Unknown location — Other"
+        assert row["borough"] == "Southwark"
+        assert row["cycling_summary"] is None
+        assert row["lon"] is None
 
     def test_cycling_summary_included(self):
-        props = disruption_to_notion_properties(
+        row = disruption_to_db_row(
             disruption={"id": "TEST-2", "location": "Test Road"},
             borough="Lambeth",
             cycling_impact="high",
             cycling_summary="Major impact on cyclists due to road closure.",
         )
-        assert props["Cycling Summary"]["rich_text"][0]["text"]["content"] == (
-            "Major impact on cyclists due to road closure."
-        )
+        assert row["cycling_summary"] == "Major impact on cyclists due to road closure."

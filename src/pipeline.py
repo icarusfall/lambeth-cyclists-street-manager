@@ -1,4 +1,6 @@
-"""Core processing pipeline: geo-filter → classify → write to Notion."""
+"""Core processing pipeline: geo-filter → classify → write to PostgreSQL."""
+
+from __future__ import annotations
 
 import logging
 
@@ -6,8 +8,8 @@ from src.geo.filter import GeoFilter, parse_bng_wkt_to_wgs84
 from src.geo.cycling_infrastructure import CyclingInfrastructureIndex
 from src.classifier.rules import quick_cycling_impact, upgrade_impact_with_cid
 from src.classifier.claude import get_cycling_summary
-from src.notion.schemas import work_to_notion_properties
-from src.notion.writer import NotionWriter
+from src.db.schemas import work_to_db_row
+from src.db.writer import DatabaseWriter
 
 logger = logging.getLogger(__name__)
 
@@ -58,11 +60,11 @@ class Pipeline:
     def __init__(
         self,
         geo_filter: GeoFilter,
-        notion_writer: NotionWriter,
+        db_writer: DatabaseWriter,
         cid_index: CyclingInfrastructureIndex | None = None,
     ) -> None:
         self._geo_filter = geo_filter
-        self._notion_writer = notion_writer
+        self._db_writer = db_writer
         self._cid_index = cid_index
 
     async def process_notification(self, notification: dict) -> None:
@@ -71,9 +73,9 @@ class Pipeline:
         Steps:
         0. Normalise activity fields to permit equivalents
         1. Geo-filter: is this work in one of our target boroughs?
-        2. Classify cycling impact (rule-based)
+        2. Classify cycling impact (rule-based + CID upgrade)
         3. Optionally get Claude summary for high/medium impact
-        4. Upsert to Notion
+        4. Upsert to PostgreSQL
         """
         event_type = notification.get("event_type", "")
         object_data = notification.get("object_data", {})
@@ -129,8 +131,8 @@ class Pipeline:
         if cycling_impact in ("high", "medium"):
             cycling_summary = await get_cycling_summary(object_data, borough)
 
-        # Step 4: Build Notion properties and upsert
-        properties = work_to_notion_properties(
+        # Step 4: Build row and upsert to PostgreSQL
+        db_row = work_to_db_row(
             object_data=object_data,
             borough=borough,
             cycling_impact=cycling_impact,
@@ -139,5 +141,4 @@ class Pipeline:
             wgs84_coords=wgs84_coords,
             nearby_cycling_infra=cid_description,
         )
-
-        await self._notion_writer.upsert_roadwork(permit_ref, properties)
+        await self._db_writer.upsert_roadwork(permit_ref, db_row)

@@ -1,4 +1,4 @@
-"""TfL disruptions processing pipeline: fetch → geo-filter → classify → Notion."""
+"""TfL disruptions processing pipeline: fetch → geo-filter → classify → PostgreSQL."""
 
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ import logging
 
 from src.classifier.claude import get_disruption_cycling_summary
 from src.classifier.rules import upgrade_impact_with_cid
+from src.db.schemas import disruption_to_db_row
+from src.db.writer import DatabaseWriter
 from src.geo.cycling_infrastructure import CyclingInfrastructureIndex
 from src.geo.filter import GeoFilter
-from src.notion.schemas import disruption_to_notion_properties
-from src.notion.writer import NotionWriter
 from src.tfl.disruptions import (
     classify_disruption_impact,
     extract_point,
@@ -21,10 +21,10 @@ logger = logging.getLogger(__name__)
 
 async def poll_disruptions(
     geo_filter: GeoFilter,
-    notion_writer: NotionWriter,
+    db_writer: DatabaseWriter,
     cid_index: CyclingInfrastructureIndex | None = None,
 ) -> int:
-    """Fetch TfL disruptions, filter, classify, and write to Notion.
+    """Fetch TfL disruptions, filter, classify, and write to PostgreSQL.
 
     Returns the number of disruptions processed (created or updated).
     """
@@ -71,8 +71,8 @@ async def poll_disruptions(
         # Build coordinates string
         wgs84_coords = f"{point.x:.6f},{point.y:.6f}" if point else None
 
-        # Build Notion properties and upsert
-        properties = disruption_to_notion_properties(
+        # Write to PostgreSQL
+        db_row = disruption_to_db_row(
             disruption=disruption,
             borough=borough,
             cycling_impact=cycling_impact,
@@ -80,12 +80,11 @@ async def poll_disruptions(
             wgs84_coords=wgs84_coords,
             nearby_cycling_infra=cid_description,
         )
-
-        await notion_writer.upsert_disruption(disruption_id, properties)
+        await db_writer.upsert_disruption(disruption_id, db_row)
         processed += 1
 
-    # Mark any cached disruptions that are no longer in the feed as Resolved
-    await notion_writer.mark_resolved_disruptions(active_ids)
+    # Mark any disruptions that are no longer in the feed as Resolved
+    await db_writer.mark_resolved_disruptions(active_ids)
 
     logger.info("Processed %d disruptions in target boroughs", processed)
     return processed

@@ -1,5 +1,4 @@
 import logging
-from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -32,20 +31,16 @@ class Settings(BaseSettings):
     # Borough configuration — accepts comma-separated string from env var
     target_boroughs: str = ""
 
-    # Notion
-    notion_api_key: str = ""
-    notion_roadworks_db_id: str = ""
-    notion_disruptions_db_id: str = ""
-    notion_collisions_db_id: str = ""
+    # Database (PostgreSQL + PostGIS)
+    database_url: str = ""
 
     # TfL (optional — works without key at lower rate limits)
     tfl_api_key: str = ""
 
-    # D-TRO (Phase 4)
+    # D-TRO
     dtro_app_id: str = ""
     dtro_api_key: str = ""
     dtro_api_secret: str = ""
-    notion_traffic_orders_db_id: str = ""
 
     # Anthropic (optional)
     anthropic_api_key: str = ""
@@ -54,7 +49,7 @@ class Settings(BaseSettings):
     webhook_path: str = "/webhook/street-manager"
     log_level: str = "INFO"
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
     def get_target_boroughs(self) -> list[str]:
         """Parse target boroughs from comma-separated string, or use defaults."""

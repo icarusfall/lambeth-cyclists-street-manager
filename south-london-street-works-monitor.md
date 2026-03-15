@@ -19,28 +19,29 @@
 | 1 | SNS webhook receiver | DONE |
 | 1 | SNS signature verification | DONE |
 | 1 | Geo-filter pipeline | DONE |
-| 1 | Deduplication (via Notion queries + in-memory cache) | DONE |
-| 1 | Notion writer | DONE |
+| 1 | Deduplication (PostgreSQL ON CONFLICT upserts) | DONE |
+| 1 | Database writer (PostgreSQL + PostGIS via asyncpg) | DONE |
 | 1 | Cycling impact classifier (rule-based) | DONE |
 | 1 | Claude API enrichment (optional, for high/medium) | DONE |
 | 1 | Deployment to Railway | DONE |
 | 1 | Street Manager open data registration | DONE — all three topics confirmed (activity, section-58, permit) |
-| 1 | Notion Roadworks database created & connected | DONE |
+| 1 | Roadworks table (PostgreSQL) | DONE |
 | 1–5 | Tests (128 passing) | DONE |
 | 2 | TfL Live Disruptions API integration | DONE |
-| 2 | Disruptions Notion database | DONE |
+| 2 | Disruptions table (PostgreSQL) | DONE |
 | 3 | STATS19 cycling collision data import | DONE |
-| 3 | Cycling Collisions Notion database | DONE |
+| 3 | Collisions table (PostgreSQL) | DONE |
 | 4 | D-TRO integration | DONE |
-| 4 | Traffic Orders Notion database | DONE |
+| 4 | Traffic Orders table (PostgreSQL) | DONE |
 | 5 | TfL Cycling Infrastructure Database (CID) reference layer | DONE |
 | 5 | Classifier upgrade: CID-aware route importance scoring | DONE |
 | 5 | TfL Cycleway routes (named routes like Cycleway 5, 7, etc.) | DONE |
-| 5 | "Nearby Cycling Infrastructure" Notion field (all 3 databases) | DONE |
-| 6 | Planning London Datahub integration | PARKED — volume too high for Notion; revisit after Postgres migration |
-| 6 | Development Activity Notion database | PARKED |
-| 7 | USRN enrichment, historical analysis, alerts, dashboard, agenda integration | DEFERRED — dashboard/visualisation split to separate project |
+| 5 | "Nearby Cycling Infrastructure" database field (all 3 tables) | DONE |
+| — | Notion → PostgreSQL + PostGIS migration | DONE |
 | — | Data Dictionary (DATA_DICTIONARY.md) | DONE |
+| 6 | Planning London Datahub integration | PARKED — revisit with Postgres in place |
+| 6 | Development Activity database | PARKED |
+| 7 | USRN enrichment, historical analysis, alerts, dashboard, agenda integration | DEFERRED — dashboard/visualisation split to separate project |
 
 ### Changes from Original Spec
 

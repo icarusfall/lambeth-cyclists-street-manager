@@ -1,10 +1,10 @@
-"""Backfill STATS19 cycling collision data into Notion.
+"""Backfill STATS19 cycling collision data into PostgreSQL.
 
 Usage:
     python -m scripts.backfill_collisions [--year 2024] [--last5]
 
 Downloads STATS19 data from DfT, filters to cyclist collisions in target
-boroughs, and writes to the Notion Cycling Collisions database.
+boroughs, and writes to the PostgreSQL database.
 """
 
 import argparse
@@ -17,16 +17,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.config import settings
+from src.db.schemas import collision_to_db_row
+from src.db.writer import DatabaseWriter
 from src.geo.boundaries import load_borough_polygons
 from src.geo.filter import GeoFilter
-from src.notion.schemas import collision_to_notion_properties
-from src.notion.writer import NotionWriter
 from src.stats19.importer import import_collisions
 
 logger = logging.getLogger(__name__)
 
 
 async def main(year: int | None, use_last5: bool) -> None:
+    if not settings.database_url:
+        logger.error("DATABASE_URL not configured")
+        return
+
     # Load borough boundaries
     geojson_path = Path(__file__).parent.parent / "data" / "london_boroughs.geojson"
     borough_polygons = load_borough_polygons(str(geojson_path), settings.get_target_boroughs())
@@ -40,41 +44,29 @@ async def main(year: int | None, use_last5: bool) -> None:
         logger.info("No collisions to write")
         return
 
-    if not settings.notion_collisions_db_id:
-        logger.error("NOTION_COLLISIONS_DB_ID not configured")
-        return
-
-    # Write to Notion
-    notion_writer = NotionWriter()
-    await notion_writer.warm_collisions_cache()
+    db_writer = DatabaseWriter(settings.database_url)
+    await db_writer.connect()
 
     created = 0
-    updated = 0
     failed = 0
 
     for i, collision in enumerate(collisions):
-        properties = collision_to_notion_properties(collision)
-        existing = await notion_writer.find_collision(collision.collision_index)
-
-        page_id = await notion_writer.upsert_collision(
-            collision.collision_index, properties
-        )
-
-        if page_id:
-            if existing:
-                updated += 1
-            else:
-                created += 1
+        db_row = collision_to_db_row(collision)
+        result = await db_writer.upsert_collision(collision.collision_index, db_row)
+        if result:
+            created += 1
         else:
             failed += 1
 
         if (i + 1) % 50 == 0:
-            logger.info("Progress: %d/%d (created=%d, updated=%d, failed=%d)",
-                        i + 1, len(collisions), created, updated, failed)
+            logger.info("Progress: %d/%d (created=%d, failed=%d)",
+                        i + 1, len(collisions), created, failed)
+
+    await db_writer.close()
 
     logger.info(
-        "Done. Created %d, updated %d, failed %d (total %d)",
-        created, updated, failed, len(collisions),
+        "Done. Created %d, failed %d (total %d)",
+        created, failed, len(collisions),
     )
 
 

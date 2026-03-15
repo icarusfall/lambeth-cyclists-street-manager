@@ -13,7 +13,7 @@ from src.stats19.importer import (
     WEATHER_LABELS,
     ROAD_SURFACE_LABELS,
 )
-from src.notion.schemas import collision_to_notion_properties
+from src.db.schemas import collision_to_db_row
 
 
 @pytest.fixture
@@ -175,7 +175,7 @@ class TestFilterCyclingCollisions:
         assert len(results) == 0
 
 
-class TestCollisionNotionProperties:
+class TestCollisionDbRow:
     def test_basic_mapping(self):
         collision = CyclistCollision(
             collision_index="2024001",
@@ -197,15 +197,15 @@ class TestCollisionNotionProperties:
             data_year="2024",
         )
 
-        props = collision_to_notion_properties(collision)
-        assert props["Name"]["title"][0]["text"]["content"] == "A23 — 01/07/2024"
-        assert props["Borough"]["select"]["name"] == "Lambeth"
-        assert props["Severity"]["select"]["name"] == "Serious"
-        assert props["Number of Cyclists Hurt"]["number"] == 1
-        assert props["Other Vehicles"]["rich_text"][0]["text"]["content"] == "Car"
-        assert props["Date"]["date"]["start"] == "2024-07-01"
-        assert props["Speed Limit"]["number"] == 30
-        assert props["Data Year"]["rich_text"][0]["text"]["content"] == "2024"
+        row = collision_to_db_row(collision)
+        assert row["name"] == "A23 — 01/07/2024"
+        assert row["borough"] == "Lambeth"
+        assert row["severity"] == "Serious"
+        assert row["number_of_cyclists_hurt"] == 1
+        assert row["other_vehicles"] == "Car"
+        assert row["date"] == "2024-07-01"
+        assert row["speed_limit"] == 30
+        assert row["data_year"] == "2024"
 
     def test_no_road_name_uses_unknown(self):
         collision = CyclistCollision(
@@ -228,9 +228,9 @@ class TestCollisionNotionProperties:
             data_year="2024",
         )
 
-        props = collision_to_notion_properties(collision)
-        assert props["Name"]["title"][0]["text"]["content"] == "Unknown road — 01/07/2024"
-        assert props["Other Vehicles"]["rich_text"][0]["text"]["content"] == "None"
+        row = collision_to_db_row(collision)
+        assert row["name"] == "Unknown road — 01/07/2024"
+        assert row["other_vehicles"] == "None"
 
 
 class TestLookupTables:
