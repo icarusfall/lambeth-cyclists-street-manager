@@ -1,7 +1,5 @@
--- PostGIS schema for South London Street Works Monitor
+-- PostgreSQL schema for South London Street Works Monitor
 -- Run against Railway PostgreSQL: psql $DATABASE_URL -f sql/schema.sql
-
-CREATE EXTENSION IF NOT EXISTS postgis;
 
 -- Auto-update trigger function
 CREATE OR REPLACE FUNCTION update_updated_at()
@@ -36,11 +34,11 @@ CREATE TABLE IF NOT EXISTS roadworks (
     nearby_cycling_infra TEXT,
     activity_type       TEXT,
     source_event        TEXT,
-    location            GEOMETRY(Point, 4326),
+    lon                 DOUBLE PRECISION,
+    lat                 DOUBLE PRECISION,
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_roadworks_location ON roadworks USING GIST (location);
 CREATE INDEX IF NOT EXISTS idx_roadworks_borough ON roadworks (borough);
 CREATE INDEX IF NOT EXISTS idx_roadworks_impact ON roadworks (cycling_impact);
 CREATE INDEX IF NOT EXISTS idx_roadworks_status ON roadworks (work_status);
@@ -67,11 +65,11 @@ CREATE TABLE IF NOT EXISTS disruptions (
     cycling_impact      TEXT CHECK (cycling_impact IN ('High','Medium','Low','Minimal')),
     cycling_summary     TEXT,
     nearby_cycling_infra TEXT,
-    location            GEOMETRY(Point, 4326),
+    lon                 DOUBLE PRECISION,
+    lat                 DOUBLE PRECISION,
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_disruptions_location ON disruptions USING GIST (location);
 CREATE INDEX IF NOT EXISTS idx_disruptions_borough ON disruptions (borough);
 CREATE INDEX IF NOT EXISTS idx_disruptions_status ON disruptions (status);
 
@@ -98,10 +96,10 @@ CREATE TABLE IF NOT EXISTS collisions (
     weather                 TEXT,
     road_surface            TEXT,
     data_year               TEXT,
-    location                GEOMETRY(Point, 4326),
+    lon                     DOUBLE PRECISION,
+    lat                     DOUBLE PRECISION,
     created_at              TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_collisions_location ON collisions USING GIST (location);
 CREATE INDEX IF NOT EXISTS idx_collisions_borough ON collisions (borough);
 CREATE INDEX IF NOT EXISTS idx_collisions_severity ON collisions (severity);
 CREATE INDEX IF NOT EXISTS idx_collisions_date ON collisions (date);
@@ -125,11 +123,11 @@ CREATE TABLE IF NOT EXISTS traffic_orders (
     cycling_summary         TEXT,
     nearby_cycling_infra    TEXT,
     schema_version          TEXT,
-    location                GEOMETRY(Point, 4326),
+    lon                     DOUBLE PRECISION,
+    lat                     DOUBLE PRECISION,
     created_at              TIMESTAMPTZ DEFAULT NOW(),
     updated_at              TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_traffic_orders_location ON traffic_orders USING GIST (location);
 CREATE INDEX IF NOT EXISTS idx_traffic_orders_borough ON traffic_orders (borough);
 CREATE INDEX IF NOT EXISTS idx_traffic_orders_impact ON traffic_orders (cycling_impact);
 

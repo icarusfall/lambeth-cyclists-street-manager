@@ -1,4 +1,4 @@
-"""PostgreSQL + PostGIS database writer using asyncpg."""
+"""PostgreSQL database writer using asyncpg."""
 
 from __future__ import annotations
 
@@ -9,15 +9,8 @@ import asyncpg
 logger = logging.getLogger(__name__)
 
 
-def _point_sql(lon: float | None, lat: float | None) -> str | None:
-    """Build a PostGIS point expression, or None if coords missing."""
-    if lon is not None and lat is not None:
-        return f"SRID=4326;POINT({lon} {lat})"
-    return None
-
-
 class DatabaseWriter:
-    """Writes records to PostgreSQL + PostGIS using asyncpg connection pool."""
+    """Writes records to PostgreSQL using asyncpg connection pool."""
 
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
@@ -36,7 +29,6 @@ class DatabaseWriter:
 
     async def upsert_roadwork(self, permit_ref: str, data: dict) -> str | None:
         """Insert or update a roadwork record. Returns row ID as string."""
-        point = _point_sql(data.get("lon"), data.get("lat"))
         try:
             row = await self._pool.fetchrow(
                 """
@@ -46,12 +38,12 @@ class DatabaseWriter:
                     work_category, traffic_management, work_status,
                     proposed_start, proposed_end, actual_start,
                     ttro_required, cycling_impact, cycling_summary,
-                    nearby_cycling_infra, activity_type, source_event, location
+                    nearby_cycling_infra, activity_type, source_event,
+                    lon, lat
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
                     $13::date, $14::date, $15::date,
-                    $16, $17, $18, $19, $20, $21,
-                    CASE WHEN $22::text IS NOT NULL THEN ST_GeomFromEWKT($22) ELSE NULL END
+                    $16, $17, $18, $19, $20, $21, $22, $23
                 )
                 ON CONFLICT (permit_reference) DO UPDATE SET
                     name = EXCLUDED.name,
@@ -74,7 +66,8 @@ class DatabaseWriter:
                     nearby_cycling_infra = EXCLUDED.nearby_cycling_infra,
                     activity_type = EXCLUDED.activity_type,
                     source_event = EXCLUDED.source_event,
-                    location = COALESCE(EXCLUDED.location, roadworks.location)
+                    lon = COALESCE(EXCLUDED.lon, roadworks.lon),
+                    lat = COALESCE(EXCLUDED.lat, roadworks.lat)
                 RETURNING id
                 """,
                 permit_ref, data.get("name"), data.get("work_reference"),
@@ -87,7 +80,7 @@ class DatabaseWriter:
                 data.get("cycling_impact"), data.get("cycling_summary"),
                 data.get("nearby_cycling_infra"),
                 data.get("activity_type"), data.get("source_event"),
-                point,
+                data.get("lon"), data.get("lat"),
             )
             logger.info("Upserted roadwork %s (id=%s)", permit_ref, row["id"])
             return str(row["id"])
@@ -97,7 +90,6 @@ class DatabaseWriter:
 
     async def upsert_disruption(self, disruption_id: str, data: dict) -> str | None:
         """Insert or update a TfL disruption record."""
-        point = _point_sql(data.get("lon"), data.get("lat"))
         try:
             row = await self._pool.fetchrow(
                 """
@@ -105,12 +97,12 @@ class DatabaseWriter:
                     disruption_id, name, borough, category, sub_category,
                     status, severity, location_desc, corridors,
                     start_time, end_time, description,
-                    cycling_impact, cycling_summary, nearby_cycling_infra, location
+                    cycling_impact, cycling_summary, nearby_cycling_infra,
+                    lon, lat
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9,
                     $10::timestamptz, $11::timestamptz, $12,
-                    $13, $14, $15,
-                    CASE WHEN $16::text IS NOT NULL THEN ST_GeomFromEWKT($16) ELSE NULL END
+                    $13, $14, $15, $16, $17
                 )
                 ON CONFLICT (disruption_id) DO UPDATE SET
                     name = EXCLUDED.name,
@@ -127,7 +119,8 @@ class DatabaseWriter:
                     cycling_impact = EXCLUDED.cycling_impact,
                     cycling_summary = EXCLUDED.cycling_summary,
                     nearby_cycling_infra = EXCLUDED.nearby_cycling_infra,
-                    location = COALESCE(EXCLUDED.location, disruptions.location)
+                    lon = COALESCE(EXCLUDED.lon, disruptions.lon),
+                    lat = COALESCE(EXCLUDED.lat, disruptions.lat)
                 RETURNING id
                 """,
                 disruption_id, data.get("name"), data.get("borough"),
@@ -137,7 +130,8 @@ class DatabaseWriter:
                 data.get("start_time"), data.get("end_time"),
                 data.get("description"), data.get("cycling_impact"),
                 data.get("cycling_summary"),
-                data.get("nearby_cycling_infra"), point,
+                data.get("nearby_cycling_infra"),
+                data.get("lon"), data.get("lat"),
             )
             logger.info("Upserted disruption %s (id=%s)", disruption_id, row["id"])
             return str(row["id"])
@@ -147,7 +141,6 @@ class DatabaseWriter:
 
     async def upsert_collision(self, collision_ref: str, data: dict) -> str | None:
         """Insert or update a collision record."""
-        point = _point_sql(data.get("lon"), data.get("lat"))
         try:
             row = await self._pool.fetchrow(
                 """
@@ -155,11 +148,11 @@ class DatabaseWriter:
                     collision_reference, name, borough, date, time,
                     severity, number_of_cyclists_hurt, worst_cyclist_severity,
                     other_vehicles, road_name, speed_limit, junction_detail,
-                    light_conditions, weather, road_surface, data_year, location
+                    light_conditions, weather, road_surface, data_year,
+                    lon, lat
                 ) VALUES (
                     $1, $2, $3, $4::date, $5, $6, $7, $8, $9, $10, $11, $12,
-                    $13, $14, $15, $16,
-                    CASE WHEN $17::text IS NOT NULL THEN ST_GeomFromEWKT($17) ELSE NULL END
+                    $13, $14, $15, $16, $17, $18
                 )
                 ON CONFLICT (collision_reference) DO UPDATE SET
                     name = EXCLUDED.name,
@@ -177,7 +170,8 @@ class DatabaseWriter:
                     weather = EXCLUDED.weather,
                     road_surface = EXCLUDED.road_surface,
                     data_year = EXCLUDED.data_year,
-                    location = COALESCE(EXCLUDED.location, collisions.location)
+                    lon = COALESCE(EXCLUDED.lon, collisions.lon),
+                    lat = COALESCE(EXCLUDED.lat, collisions.lat)
                 RETURNING id
                 """,
                 collision_ref, data.get("name"), data.get("borough"),
@@ -187,7 +181,8 @@ class DatabaseWriter:
                 data.get("road_name"), data.get("speed_limit"),
                 data.get("junction_detail"), data.get("light_conditions"),
                 data.get("weather"), data.get("road_surface"),
-                data.get("data_year"), point,
+                data.get("data_year"),
+                data.get("lon"), data.get("lat"),
             )
             logger.info("Upserted collision %s (id=%s)", collision_ref, row["id"])
             return str(row["id"])
@@ -197,7 +192,6 @@ class DatabaseWriter:
 
     async def upsert_traffic_order(self, dtro_id: str, data: dict) -> str | None:
         """Insert or update a traffic order record."""
-        point = _point_sql(data.get("lon"), data.get("lat"))
         try:
             row = await self._pool.fetchrow(
                 """
@@ -206,12 +200,11 @@ class DatabaseWriter:
                     location_description, street_name, made_date, effective_date,
                     end_date, authority, action_type,
                     cycling_impact, cycling_summary, nearby_cycling_infra,
-                    schema_version, location
+                    schema_version, lon, lat
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7,
                     $8::date, $9::date, $10::date,
-                    $11, $12, $13, $14, $15, $16,
-                    CASE WHEN $17::text IS NOT NULL THEN ST_GeomFromEWKT($17) ELSE NULL END
+                    $11, $12, $13, $14, $15, $16, $17, $18
                 )
                 ON CONFLICT (dtro_id) DO UPDATE SET
                     name = EXCLUDED.name,
@@ -229,7 +222,8 @@ class DatabaseWriter:
                     cycling_summary = EXCLUDED.cycling_summary,
                     nearby_cycling_infra = EXCLUDED.nearby_cycling_infra,
                     schema_version = EXCLUDED.schema_version,
-                    location = COALESCE(EXCLUDED.location, traffic_orders.location)
+                    lon = COALESCE(EXCLUDED.lon, traffic_orders.lon),
+                    lat = COALESCE(EXCLUDED.lat, traffic_orders.lat)
                 RETURNING id
                 """,
                 dtro_id, data.get("name"), data.get("dtro_reference"),
@@ -240,7 +234,7 @@ class DatabaseWriter:
                 data.get("action_type"), data.get("cycling_impact"),
                 data.get("cycling_summary"),
                 data.get("nearby_cycling_infra"), data.get("schema_version"),
-                point,
+                data.get("lon"), data.get("lat"),
             )
             logger.info("Upserted traffic order %s (id=%s)", dtro_id, row["id"])
             return str(row["id"])

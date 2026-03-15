@@ -11,7 +11,7 @@ from src.db.schemas import (
     traffic_order_to_db_row,
     work_to_db_row,
 )
-from src.db.writer import DatabaseWriter, _point_sql
+from src.db.writer import DatabaseWriter
 
 
 # --- Schema mapper tests ---
@@ -185,21 +185,6 @@ class TestTrafficOrderToDbRow:
         assert row["cycling_impact"] == "Negative"
         assert row["end_date"] == "2026-06-01"
         assert row["lon"] == pytest.approx(-0.114)
-
-
-# --- Writer helper tests ---
-
-
-class TestPointSql:
-    def test_valid_coords(self):
-        assert _point_sql(-0.114, 51.462) == "SRID=4326;POINT(-0.114 51.462)"
-
-    def test_none_coords(self):
-        assert _point_sql(None, None) is None
-
-    def test_partial_coords(self):
-        assert _point_sql(-0.114, None) is None
-        assert _point_sql(None, 51.462) is None
 
 
 # --- Writer mock tests ---
