@@ -83,7 +83,7 @@ async def _handle_notification(body: dict) -> Response:
         logger.debug("Skipping irrelevant event type: %s for %s", event_type, object_ref)
         return Response(status_code=200)
 
-    logger.info("Processing %s for %s", event_type, object_ref)
+    logger.debug("Processing %s for %s", event_type, object_ref)
 
     if _notification_handler:
         try:
