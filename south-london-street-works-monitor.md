@@ -39,6 +39,10 @@
 | 5 | "Nearby Cycling Infrastructure" database field (all 3 tables) | DONE |
 | — | Notion → PostgreSQL + PostGIS migration | DONE |
 | — | Data Dictionary (DATA_DICTIONARY.md) | DONE |
+| — | LAQN air quality data integration | DONE |
+| — | Air Quality table (PostgreSQL) | DONE |
+| — | Fix TfL disruption datetime parsing (ISO strings → datetime objects) | DONE |
+| — | Reduce log noise (webhook DEBUG, disable uvicorn access log) | DONE |
 | 6 | Planning London Datahub integration | PARKED — revisit with Postgres in place |
 | 6 | Development Activity database | PARKED |
 | 7 | USRN enrichment, historical analysis, alerts, dashboard, agenda integration | DEFERRED — dashboard/visualisation split to separate project |

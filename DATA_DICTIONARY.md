@@ -235,7 +235,72 @@ Disruptions that disappear from the TfL API are automatically marked as **Resolv
 
 ---
 
-## 5. Cycling Infrastructure Reference Layer (runtime only)
+## 5. Air Quality (`air_quality` table)
+
+**Update cadence:** Daily poll at 10:00 UK time + on app startup
+**Primary key:** `id` (auto-increment)
+**Dedup key:** `(site_code, species_code, reading_date)` (UNIQUE)
+**Data source:** London Air Quality Network (LAQN) API (`api.erg.ic.ac.uk/AirQuality`)
+**Auth:** None required (public API, Open Government Licence)
+
+### Columns
+
+| Column | Type | Nullable | Description | Example |
+|--------|------|----------|-------------|---------|
+| id | SERIAL | no | Auto-increment primary key | 1 |
+| site_code | TEXT | no | LAQN monitoring station code | "LB4" |
+| site_name | TEXT | yes | Station name | "Lambeth - Brixton Road" |
+| site_type | TEXT | yes | Station classification | "Kerbside", "Roadside", "Urban Background", "Suburban" |
+| borough | TEXT | no | Local authority name | "Lambeth" |
+| species_code | TEXT | no | Pollutant measured | "NO2", "PM10", "PM25" |
+| reading_date | DATE | no | Date of measurement | 2026-03-15 |
+| air_quality_index | INTEGER | yes | Daily Air Quality Index (1-10) | 3 |
+| air_quality_band | TEXT | yes | Index band | "Low", "Moderate", "High", "Very High" |
+| index_source | TEXT | yes | How the index was derived | "Measurement", "Trigger" |
+| lon | DOUBLE PRECISION | yes | WGS84 longitude | -0.1146 |
+| lat | DOUBLE PRECISION | yes | WGS84 latitude | 51.4641 |
+| created_at | TIMESTAMPTZ | no | Row creation timestamp | auto |
+| updated_at | TIMESTAMPTZ | no | Last modification timestamp | auto (trigger) |
+
+### Indexes
+
+- `idx_aq_borough` on `borough`
+- `idx_aq_date` on `reading_date`
+- `idx_aq_band` on `air_quality_band`
+
+### Air Quality Index bands
+
+| Band | Index Range | Health Advice |
+|------|------------|---------------|
+| Low | 1-3 | Enjoy your usual outdoor activities |
+| Moderate | 4-6 | Consider reducing strenuous outdoor activity if you experience symptoms |
+| High | 7-9 | Reduce strenuous outdoor exertion |
+| Very High | 10 | Avoid strenuous outdoor activity |
+
+### Monitoring stations (~35 across target boroughs)
+
+| Borough | Sites | Example Stations |
+|---------|-------|-----------------|
+| Lambeth | 6 | Brixton Road (LB4), Streatham Green (LB6), Vauxhall Cross (LB2) |
+| Southwark | 1 | A2 Old Kent Road (SK5) |
+| Wandsworth | 1 | Lavender Hill (WAC) |
+| Lewisham | 7 | Catford (LW1), Deptford (LW5), New Cross (LW2) |
+| Merton | 5 | Morden Civic Centre (ME1), Mitcham (MEA) |
+| Croydon | 9 | Norbury (CR5), Purley Way (CR2), Thornton Heath (CR3) |
+| City of London | 7 | Beech Street (CT4), Farringdon Street (CT2), Walbrook Wharf (CT6) |
+| Westminster | 3 | Marylebone Road (MR8), Regent Street (CE3) |
+
+### Pollutants measured
+
+| Code | Name | Typical Sources |
+|------|------|----------------|
+| NO2 | Nitrogen Dioxide | Road traffic, diesel engines |
+| PM10 | PM10 Particulate | Road dust, construction, brakes/tyres |
+| PM25 | PM2.5 Particulate | Combustion, wood burning, traffic |
+
+---
+
+## 6. Cycling Infrastructure Reference Layer (runtime only)
 
 This is a **spatial index loaded at app startup**, not stored in the database. It enriches the other tables via the `nearby_cycling_infra` field.
 
@@ -271,7 +336,7 @@ When a roadwork/disruption is within 50m of cycling infrastructure:
 
 ---
 
-## 6. Coordinates
+## 7. Coordinates
 
 All coordinate columns use **WGS84** (EPSG:4326) stored as separate `lon` and `lat` DOUBLE PRECISION columns.
 
@@ -290,7 +355,7 @@ WHERE lon BETWEEN -0.15 AND -0.05
 
 ---
 
-## 7. Example Queries
+## 8. Example Queries
 
 ### Active high-impact roadworks
 
@@ -329,6 +394,26 @@ SELECT 'disruption', name, cycling_impact, lon, lat FROM disruptions
 WHERE lon BETWEEN -0.120 AND -0.110 AND lat BETWEEN 51.457 AND 51.466;
 ```
 
+### Current air quality across boroughs
+
+```sql
+SELECT borough, site_name, species_code,
+       air_quality_index, air_quality_band
+FROM air_quality
+WHERE reading_date = CURRENT_DATE
+ORDER BY air_quality_index DESC;
+```
+
+### Sites with elevated pollution (Moderate or worse)
+
+```sql
+SELECT site_name, borough, species_code,
+       air_quality_band, reading_date
+FROM air_quality
+WHERE air_quality_band IN ('Moderate', 'High', 'Very High')
+ORDER BY reading_date DESC, air_quality_index DESC;
+```
+
 ### Traffic orders affecting cycling
 
 ```sql
@@ -341,7 +426,7 @@ ORDER BY effective_date DESC;
 
 ---
 
-## 8. Data Freshness & Pipeline Schedule
+## 9. Data Freshness & Pipeline Schedule
 
 | Table | Update Mechanism | Frequency | Typical Latency |
 |-------|-----------------|-----------|-----------------|
@@ -349,10 +434,11 @@ ORDER BY effective_date DESC;
 | disruptions | HTTP poll | Daily at 09:00 UK + startup | Up to 24 hours |
 | collisions | Manual import script | Annual | Months (DfT publishes ~6 months after year end) |
 | traffic_orders | HTTP poll | Daily at 09:30 UK + startup | Up to 24 hours |
+| air_quality | HTTP poll | Daily at 10:00 UK + startup | Up to 24 hours |
 
 ---
 
-## 9. Other Data Sources (not in this database)
+## 10. Other Data Sources (not in this database)
 
 The LCC South London Notion workspace contains manually curated tables that may be relevant for a visualisation project:
 
