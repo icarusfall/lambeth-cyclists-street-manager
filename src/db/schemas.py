@@ -14,6 +14,16 @@ def _parse_date(value: str | None) -> _dt.date | None:
         return None
 
 
+def _parse_datetime(value: str | None) -> _dt.datetime | None:
+    """Parse an ISO datetime string to a datetime object, or None."""
+    if not value:
+        return None
+    try:
+        return _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
 def _parse_bool(value) -> bool:
     return str(value).lower() in ("yes", "true", "1")
 
@@ -170,8 +180,8 @@ def disruption_to_db_row(
         "severity": disruption.get("severity", ""),
         "location_desc": location,
         "corridors": corridors,
-        "start_time": disruption.get("startDateTime"),
-        "end_time": disruption.get("endDateTime"),
+        "start_time": _parse_datetime(disruption.get("startDateTime")),
+        "end_time": _parse_datetime(disruption.get("endDateTime")),
         "description": (disruption.get("comments", "") or "")[:2000],
         "cycling_impact": cycling_impact.capitalize(),
         "cycling_summary": cycling_summary,
