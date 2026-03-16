@@ -134,3 +134,29 @@ CREATE INDEX IF NOT EXISTS idx_traffic_orders_impact ON traffic_orders (cycling_
 CREATE OR REPLACE TRIGGER trg_traffic_orders_updated_at
     BEFORE UPDATE ON traffic_orders
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- Air Quality (LAQN daily readings per monitoring site)
+CREATE TABLE IF NOT EXISTS air_quality (
+    id                  SERIAL PRIMARY KEY,
+    site_code           TEXT NOT NULL,
+    site_name           TEXT,
+    site_type           TEXT,
+    borough             TEXT NOT NULL,
+    species_code        TEXT NOT NULL,
+    reading_date        DATE NOT NULL,
+    air_quality_index   INTEGER,
+    air_quality_band    TEXT,
+    index_source        TEXT,
+    lon                 DOUBLE PRECISION,
+    lat                 DOUBLE PRECISION,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (site_code, species_code, reading_date)
+);
+CREATE INDEX IF NOT EXISTS idx_aq_borough ON air_quality (borough);
+CREATE INDEX IF NOT EXISTS idx_aq_date ON air_quality (reading_date);
+CREATE INDEX IF NOT EXISTS idx_aq_band ON air_quality (air_quality_band);
+
+CREATE OR REPLACE TRIGGER trg_air_quality_updated_at
+    BEFORE UPDATE ON air_quality
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();

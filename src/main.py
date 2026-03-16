@@ -17,6 +17,7 @@ from src.geo.filter import GeoFilter
 from src.pipeline import Pipeline
 from src.street_manager.webhook import router as webhook_router, set_notification_handler
 from src.dtro.pipeline import poll_traffic_orders
+from src.laqn.pipeline import poll_air_quality
 from src.tfl.pipeline import poll_disruptions
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,8 @@ _app_state = {
     "disruptions_last_count": 0,
     "last_dtro_poll": None,
     "dtro_last_count": 0,
+    "last_laqn_poll": None,
+    "laqn_last_count": 0,
     "cid_features": 0,
     "status": "starting",
     "error": None,
@@ -44,6 +47,7 @@ async def lifespan(app: FastAPI):
     db_writer = None
     poller_task = None
     dtro_poller_task = None
+    laqn_poller_task = None
 
     try:
         # Load borough boundaries
@@ -112,6 +116,10 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("D-TRO poller not started — DTRO_API_KEY not set")
 
+        # Start LAQN air quality poller
+        laqn_poller_task = asyncio.create_task(_laqn_poller(db_writer))
+        logger.info("LAQN air quality poller started (daily at 10:00 UK time)")
+
     except Exception as e:
         logger.exception("Startup error — app will serve health endpoint but not process notifications")
         _app_state["status"] = "degraded"
@@ -125,6 +133,8 @@ async def lifespan(app: FastAPI):
         poller_task.cancel()
     if dtro_poller_task:
         dtro_poller_task.cancel()
+    if laqn_poller_task:
+        laqn_poller_task.cancel()
     if db_writer:
         await db_writer.close()
     logger.info("Shutting down")
@@ -195,6 +205,35 @@ async def _dtro_poller(
             logger.exception("D-TRO poll failed")
 
 
+async def _laqn_poller(db_writer: DatabaseWriter) -> None:
+    """Poll LAQN air quality data daily at 10:00 UK time."""
+    uk_tz = ZoneInfo("Europe/London")
+
+    # Initial poll on startup
+    try:
+        count = await poll_air_quality(db_writer)
+        _app_state["last_laqn_poll"] = datetime.now(timezone.utc).isoformat()
+        _app_state["laqn_last_count"] = count
+    except Exception:
+        logger.exception("LAQN initial poll failed")
+
+    while True:
+        now = datetime.now(uk_tz)
+        next_run = now.replace(hour=10, minute=0, second=0, microsecond=0)
+        if now >= next_run:
+            next_run = next_run + timedelta(days=1)
+        wait_seconds = (next_run - now).total_seconds()
+        logger.info("Next LAQN poll at %s (in %.0f seconds)", next_run, wait_seconds)
+        await asyncio.sleep(wait_seconds)
+
+        try:
+            count = await poll_air_quality(db_writer)
+            _app_state["last_laqn_poll"] = datetime.now(timezone.utc).isoformat()
+            _app_state["laqn_last_count"] = count
+        except Exception:
+            logger.exception("LAQN poll failed")
+
+
 app = FastAPI(
     title="South London Street Works Monitor",
     version="0.1.0",
@@ -217,6 +256,8 @@ async def health():
         "disruptions_last_count": _app_state["disruptions_last_count"],
         "last_dtro_poll": _app_state["last_dtro_poll"],
         "dtro_last_count": _app_state["dtro_last_count"],
+        "last_laqn_poll": _app_state["last_laqn_poll"],
+        "laqn_last_count": _app_state["laqn_last_count"],
         "cid_features": _app_state["cid_features"],
         "boroughs_monitored": len(settings.get_target_boroughs()),
         "error": _app_state["error"],

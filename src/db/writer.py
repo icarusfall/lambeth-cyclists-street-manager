@@ -242,6 +242,42 @@ class DatabaseWriter:
             logger.exception("Failed to upsert traffic order %s", dtro_id)
             return None
 
+    async def upsert_air_quality(self, data: dict) -> str | None:
+        """Insert or update an air quality reading."""
+        try:
+            row = await self._pool.fetchrow(
+                """
+                INSERT INTO air_quality (
+                    site_code, site_name, site_type, borough,
+                    species_code, reading_date,
+                    air_quality_index, air_quality_band, index_source,
+                    lon, lat
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+                )
+                ON CONFLICT (site_code, species_code, reading_date) DO UPDATE SET
+                    site_name = EXCLUDED.site_name,
+                    site_type = EXCLUDED.site_type,
+                    borough = EXCLUDED.borough,
+                    air_quality_index = EXCLUDED.air_quality_index,
+                    air_quality_band = EXCLUDED.air_quality_band,
+                    index_source = EXCLUDED.index_source,
+                    lon = COALESCE(EXCLUDED.lon, air_quality.lon),
+                    lat = COALESCE(EXCLUDED.lat, air_quality.lat)
+                RETURNING id
+                """,
+                data.get("site_code"), data.get("site_name"),
+                data.get("site_type"), data.get("borough"),
+                data.get("species_code"), data.get("reading_date"),
+                data.get("air_quality_index"), data.get("air_quality_band"),
+                data.get("index_source"),
+                data.get("lon"), data.get("lat"),
+            )
+            return str(row["id"])
+        except Exception:
+            logger.exception("Failed to upsert air quality %s/%s", data.get("site_code"), data.get("species_code"))
+            return None
+
     async def mark_resolved_disruptions(self, active_ids: set[str]) -> None:
         """Mark disruptions as Resolved if they're no longer in the TfL feed."""
         if not active_ids:
